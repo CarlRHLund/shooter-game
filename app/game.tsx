@@ -12,9 +12,10 @@ interface Explosion { id: number; pos: Vec2; age: number; maxR: number }
 interface Bullet    { id: number; pos: Vec2; vel: Vec2; pierceLeft: number; bounceLeft: number; explodeR: number }
 interface WeaponStats { fireInterval: number; multiShot: number; explodeR: number; piercing: number; bouncing: number }
 interface PlayerStats { hp: number; maxHp: number; armor: number; regen: number; speed: number }
-interface Upgrade   { id: string; name: string; desc: string }
+interface Upgrade    { id: string; name: string; desc: string }
+interface Difficulty { id: string; name: string; desc: string; color: string; hpMult: number; spdMult: number; dmgMult: number; spawnMult: number }
 
-type GameState = 'playing' | 'upgrading' | 'between_stage' | 'game_over';
+type GameState = 'start' | 'playing' | 'upgrading' | 'between_stage' | 'game_over';
 
 // ── upgrade pools ─────────────────────────────────────────────────────────────
 const WEAPON_UPS: Upgrade[] = [
@@ -29,6 +30,13 @@ const BASE_UPS: Upgrade[] = [
   { id: 'regen',  name: 'HP REGEN',    desc: '+1.5 HP per second' },
   { id: 'speed',  name: 'MOVE SPEED',  desc: 'Ship speed +15%' },
   { id: 'armor',  name: 'ARMOR',       desc: '-10% incoming damage' },
+];
+
+const DIFFICULTIES: Difficulty[] = [
+  { id: 'easy',      name: 'CADET',     desc: 'Enemies weaker · slower spawns',  color: '#00bb44', hpMult: 0.6,  spdMult: 0.75, dmgMult: 0.6,  spawnMult: 1.4  },
+  { id: 'normal',    name: 'PILOT',     desc: 'Standard · intended experience',  color: '#0088ff', hpMult: 1.0,  spdMult: 1.0,  dmgMult: 1.0,  spawnMult: 1.0  },
+  { id: 'hard',      name: 'COMMANDER', desc: 'Harder enemies · faster spawns',  color: '#ff8800', hpMult: 1.5,  spdMult: 1.3,  dmgMult: 1.4,  spawnMult: 0.75 },
+  { id: 'nightmare', name: 'ADMIRAL',   desc: 'Maximum chaos · good luck',       color: '#ff2200', hpMult: 2.5,  spdMult: 1.7,  dmgMult: 2.0,  spawnMult: 0.5  },
 ];
 
 // ── stage palettes ────────────────────────────────────────────────────────────
@@ -111,7 +119,8 @@ export default function Game() {
     let damageFlash = 0;
 
     // ── UI state ───────────────────────────────────────────────────────────
-    let gameState: GameState = 'playing';
+    let gameState: GameState = 'start';
+    let difficulty: Difficulty = DIFFICULTIES[1];
     let weaponChoices: Upgrade[] = [];
     let baseChoices:   Upgrade[] = [];
 
@@ -120,14 +129,26 @@ export default function Game() {
 
     // ── stage scaling ──────────────────────────────────────────────────────
     function killsNeeded() { return 20 + (stage-1) * 5; }
-    function blobHp()      { return 3  + (stage-1) * 2; }
-    function blobSpd()     { return 70 + (stage-1) * 8; }
-    function bossHp()      { return 30 + (stage-1) * 20; }
-    function spawnBase()   { return Math.max(0.5, 1.8 - (stage-1) * 0.12); }
+    function blobHp()      { return Math.max(1, Math.round((3  + (stage-1) * 2)  * difficulty.hpMult)); }
+    function blobSpd()     { return (70 + (stage-1) * 8)  * difficulty.spdMult; }
+    function bossHp()      { return Math.max(5, Math.round((30 + (stage-1) * 20) * difficulty.hpMult)); }
+    function spawnBase()   { return Math.max(0.3, (1.8 - (stage-1) * 0.12) * difficulty.spawnMult); }
     function palette()     { return PALETTES[Math.min(stage-1, PALETTES.length-1)]; }
-    function contactDmg()  { return 12 + (stage-1) * 3; }
+    function contactDmg()  { return (12 + (stage-1) * 3) * difficulty.dmgMult; }
 
     // ── card layout ────────────────────────────────────────────────────────
+    // difficulty select (responsive: 2×2 on narrow screens, 1×4 on wide)
+    function diffLayout() {
+      const W = canvas.width, twoRow = W < 650;
+      const cols = twoRow ? 2 : 4;
+      const cw   = twoRow ? Math.min(155, (W-48)/2) : Math.min(168, (W-60)/4);
+      const ch   = 155;
+      const gapX = twoRow ? (W - 2*cw)/3 : (W - 4*cw)/5;
+      return { cols, cw, ch, gapX, gapY: 18 };
+    }
+    function dCardX(i: number) { const { cols, cw, gapX } = diffLayout(); return gapX + (i%cols)*(cw+gapX); }
+    function dCardY(i: number) { const { cols, ch, gapY } = diffLayout(); return canvas.height*0.42 + Math.floor(i/cols)*(ch+gapY); }
+
     const CW = 200, CH = 130, CG = 28;
     function wCardX(i: number) { return (canvas.width-(3*CW+2*CG))/2 + i*(CW+CG); }
     function wCardY()          { return canvas.height/2 - 55; }
@@ -154,7 +175,17 @@ export default function Game() {
       const r  = canvas.getBoundingClientRect();
       const mx = e.clientX - r.left, my = e.clientY - r.top;
 
-      if (gameState === 'upgrading') {
+      if (gameState === 'start') {
+        const { cw, ch } = diffLayout();
+        for (let i = 0; i < DIFFICULTIES.length; i++) {
+          const cx = dCardX(i), cy = dCardY(i);
+          if (mx >= cx && mx <= cx+cw && my >= cy && my <= cy+ch) {
+            difficulty = DIFFICULTIES[i];
+            gameState  = 'playing';
+            canvas.style.cursor = 'none';
+          }
+        }
+      } else if (gameState === 'upgrading') {
         const cy = wCardY();
         for (let i = 0; i < weaponChoices.length; i++) {
           const cx = wCardX(i);
@@ -177,6 +208,7 @@ export default function Game() {
         restartGame();
       }
     };
+
     canvas.addEventListener('mousemove',  onMove);
     canvas.addEventListener('click',      onClick);
     canvas.addEventListener('touchstart', onTouchStart, { passive: true });
@@ -270,8 +302,8 @@ export default function Game() {
       xp = 0; level = 0; xpToNext = 12;
       blobs = []; boss = null; bullets = []; xpOrbs = []; explosions = [];
       killCount = 0; spawnTimer = 0; fireTimer = 0; gameTime = 0; invTimer = 0; damageFlash = 0;
-      gameState = 'playing';
-      canvas.style.cursor = 'none';
+      gameState = 'start';
+      canvas.style.cursor = 'default';
     }
 
     // ── draw functions ─────────────────────────────────────────────────────
@@ -485,6 +517,28 @@ export default function Game() {
       ctx.fillText('[ CLICK ]', cx+cw/2, cy+ch-12);
     }
 
+    function drawStartScreen() {
+      const W = canvas.width, H = canvas.height;
+      ctx.fillStyle = 'rgba(0,0,8,0.88)'; ctx.fillRect(0,0,W,H);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#00ffaa'; ctx.shadowColor = '#00ffaa'; ctx.shadowBlur = 30;
+      ctx.font = `bold ${Math.min(52, W*0.08)}px "Courier New",monospace`;
+      ctx.fillText('RETRO SHOOTER', W/2, H*0.2);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#445566'; ctx.font = `${Math.min(12, W*0.03)}px "Courier New",monospace`;
+      ctx.fillText('10 STAGES  ·  DEFEAT THE BOSS TO ADVANCE', W/2, H*0.29);
+      ctx.fillStyle = '#7799bb'; ctx.shadowColor = '#7799bb'; ctx.shadowBlur = 8;
+      ctx.font = `bold ${Math.min(15, W*0.035)}px "Courier New",monospace`;
+      ctx.fillText('— SELECT DIFFICULTY —', W/2, H*0.37);
+      ctx.shadowBlur = 0;
+      const { cw, ch } = diffLayout();
+      for (let i = 0; i < DIFFICULTIES.length; i++) {
+        const diff = DIFFICULTIES[i];
+        drawCard(dCardX(i), dCardY(i), cw, ch, { id: diff.id, name: diff.name, desc: diff.desc }, diff.color);
+      }
+      ctx.textAlign = 'left';
+    }
+
     function drawUpgradeMenu() {
       const W = canvas.width, H = canvas.height;
       ctx.fillStyle = 'rgba(0,0,8,0.78)'; ctx.fillRect(0,0,W,H);
@@ -532,9 +586,9 @@ export default function Game() {
       ctx.fillText('GAME OVER', W/2, H/2-40);
       ctx.shadowBlur = 0;
       ctx.fillStyle = '#aabbcc'; ctx.font = '14px "Courier New",monospace';
-      ctx.fillText(`Reached Stage ${stage}  ·  Weapon Level ${level}`, W/2, H/2+14);
+      ctx.fillText(`Stage ${stage}  ·  Level ${level}  ·  ${difficulty.name}`, W/2, H/2+14);
       ctx.fillStyle = '#556677'; ctx.font = '12px "Courier New",monospace';
-      ctx.fillText('[ click anywhere to restart ]', W/2, H/2+46);
+      ctx.fillText('[ click to select difficulty and restart ]', W/2, H/2+46);
       ctx.textAlign = 'left';
     }
 
@@ -690,21 +744,23 @@ export default function Game() {
       if (boss) drawBoss(boss);
       for (const b of bullets)    drawBullet(b);
 
-      const nb  = nearestBlob(ship);
-      const aim = nb ? nb.pos : boss ? boss.pos : null;
-      const ang = aim ? Math.atan2(aim.y-ship.y, aim.x-ship.x)+Math.PI/2 : -Math.PI/2;
-      drawShip(ang);
+      if (gameState !== 'start') {
+        const nb  = nearestBlob(ship);
+        const aim = nb ? nb.pos : boss ? boss.pos : null;
+        const ang = aim ? Math.atan2(aim.y-ship.y, aim.x-ship.x)+Math.PI/2 : -Math.PI/2;
+        drawShip(ang);
 
-      // damage flash overlay
-      if (damageFlash > 0) {
-        ctx.fillStyle = `rgba(255,0,0,${damageFlash*0.28})`;
-        ctx.fillRect(0,0,W,H);
-        damageFlash = Math.max(0, damageFlash - dt*5);
+        if (damageFlash > 0) {
+          ctx.fillStyle = `rgba(255,0,0,${damageFlash*0.28})`;
+          ctx.fillRect(0,0,W,H);
+          damageFlash = Math.max(0, damageFlash - dt*5);
+        }
+
+        drawHud();
       }
 
-      drawHud();
-
-      if      (gameState === 'upgrading')     drawUpgradeMenu();
+      if      (gameState === 'start')         drawStartScreen();
+      else if (gameState === 'upgrading')     drawUpgradeMenu();
       else if (gameState === 'between_stage') drawBetweenStage();
       else if (gameState === 'game_over')     drawGameOver();
 
@@ -728,7 +784,7 @@ export default function Game() {
       ref={canvasRef}
       role="img"
       aria-label="Retro shooter game — move your finger or cursor to guide the ship"
-      style={{ display: 'block', background: '#04040f', cursor: 'none', touchAction: 'none' }}
+      style={{ display: 'block', background: '#04040f', cursor: 'default', touchAction: 'none' }}
     />
   );
 }
