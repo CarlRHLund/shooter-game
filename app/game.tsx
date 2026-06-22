@@ -5,13 +5,17 @@ import { useEffect, useRef } from 'react';
 // ── types ─────────────────────────────────────────────────────────────────────
 interface Vec2         { x: number; y: number }
 interface Star         { x: number; y: number; size: number; bright: number }
-type WeaponType = 'pistol' | 'shotgun' | 'laser' | 'rocket' | 'railgun';
-interface Blob         { id: number; pos: Vec2; radius: number; hp: number; maxHp: number; fireTimer: number }
-interface Boss         { id: number; pos: Vec2; radius: number; hp: number; maxHp: number }
+type WeaponType    = 'pistol' | 'shotgun' | 'laser' | 'rocket' | 'railgun';
+type EnemyType     = 'standard' | 'swarm' | 'tank' | 'ghost' | 'splitter';
+type BossPattern   = 'chase' | 'orbit' | 'charge' | 'summon' | 'teleport';
+type StageModifier = 'none' | 'dense_spawn' | 'xp_drought' | 'fog' | 'explosive_death' | 'regen_enemies' | 'berserk';
+interface StageConfig  { name: string; tagline: string; modifier: StageModifier; enemyType: EnemyType; bossPattern: BossPattern }
+interface Blob         { id: number; pos: Vec2; radius: number; hp: number; maxHp: number; fireTimer: number; enemyType: EnemyType; dodgeChance: number; spawnsChildren: boolean }
+interface Boss         { id: number; pos: Vec2; radius: number; hp: number; maxHp: number; pattern: BossPattern }
 interface XpOrb        { id: number; pos: Vec2 }
 interface Explosion    { id: number; pos: Vec2; age: number; maxR: number }
 interface RailgunFlash { id: number; fromX: number; fromY: number; toX: number; toY: number; age: number }
-interface Bullet       { id: number; pos: Vec2; vel: Vec2; pierceLeft: number; bounceLeft: number; explodeR: number; weaponType: WeaponType; maxRange: number; distTraveled: number; homingStrength: number; bulletSize: number }
+interface Bullet       { id: number; pos: Vec2; vel: Vec2; pierceLeft: number; bounceLeft: number; explodeR: number; weaponType: WeaponType; maxRange: number; distTraveled: number; homingStrength: number; bulletSize: number; ghostDodged: Set<number> }
 interface EnemyBullet  { id: number; pos: Vec2; vel: Vec2; dmg: number }
 interface WeaponStats  {
   type: WeaponType;
@@ -82,6 +86,20 @@ const PALETTES = [
   { blob: '#880000', glow: '#ff0000', bg: '#090000' },  // 10 crimson
 ];
 
+// ── stage configs ─────────────────────────────────────────────────────────────
+const STAGE_CONFIGS: StageConfig[] = [
+  { name: 'THE VOID',   tagline: 'IT BEGINS',               modifier: 'none',            enemyType: 'standard', bossPattern: 'chase'    },
+  { name: 'SWARM',      tagline: 'THEY COME IN WAVES',      modifier: 'dense_spawn',     enemyType: 'swarm',    bossPattern: 'orbit'    },
+  { name: 'GLACIAL',    tagline: 'SLOW AND UNSTOPPABLE',    modifier: 'none',            enemyType: 'tank',     bossPattern: 'charge'   },
+  { name: 'THE SWAMP',  tagline: 'XP IS SCARCE HERE',       modifier: 'xp_drought',      enemyType: 'standard', bossPattern: 'summon'   },
+  { name: 'NEBULA',     tagline: 'THEY HIDE IN THE DARK',   modifier: 'fog',             enemyType: 'standard', bossPattern: 'teleport' },
+  { name: 'SPLIT TIDE', tagline: 'EVERY KILL BREEDS MORE',  modifier: 'explosive_death', enemyType: 'splitter', bossPattern: 'orbit'    },
+  { name: 'HAUNTED',    tagline: "THEY WON'T STAY DOWN",    modifier: 'regen_enemies',   enemyType: 'ghost',    bossPattern: 'charge'   },
+  { name: 'PULSE',      tagline: 'BERSERK AT INTERVALS',    modifier: 'berserk',         enemyType: 'standard', bossPattern: 'chase'    },
+  { name: 'SIEGE',      tagline: 'ENDLESS ARMADA',          modifier: 'dense_spawn',     enemyType: 'tank',     bossPattern: 'summon'   },
+  { name: 'ENDGAME',    tagline: 'NO MERCY',                modifier: 'none',            enemyType: 'standard', bossPattern: 'charge'   },
+];
+
 // ── weapon factories ──────────────────────────────────────────────────────────
 function makePistol():  WeaponStats { return { type: 'pistol',  fireInterval: 0.28, multiShot: 0, explodeR: 0,  piercing: 0, bouncing: 0, bulletSpeed: 520,  bulletSize: 1.0, range: 0,   damage: 1.0,  homingStrength: 0,   fireTimer: 0 }; }
 function makeShotgun(): WeaponStats { return { type: 'shotgun', fireInterval: 0.55, multiShot: 4, explodeR: 0,  piercing: 0, bouncing: 0, bulletSpeed: 400,  bulletSize: 1.2, range: 350, damage: 0.6,  homingStrength: 0,   fireTimer: 0 }; }
@@ -148,6 +166,14 @@ export default function Game() {
     let damageFlash       = 0;
     let shieldRegenDelay  = 0;
     let floaters: Floater[] = [];
+    let stageIntroTimer   = 0;
+    let bossOrbitAngle    = 0;
+    let bossChargeVel: Vec2 | null = null;
+    let bossChargeTimer   = 3;
+    let bossTeleportTimer = 4;
+    let bossSummonTimer   = 6;
+    let berserkTimer  = 0;
+    let berserkActive = false;
 
     // ── UI state ───────────────────────────────────────────────────────────
     let gameState: GameState = 'start';
@@ -209,11 +235,12 @@ export default function Game() {
       upgradeTaken.set(id, (upgradeTaken.get(id) || 0) + 1);
     }
 
+    function stageConfig() { return STAGE_CONFIGS[Math.min(stage-1, STAGE_CONFIGS.length-1)]; }
     function killsNeeded() { return 20 + (stage-1) * 5; }
     function blobHp()      { return Math.max(1, Math.round((3  + (stage-1) * 2)  * difficulty.hpMult)); }
     function blobSpd()     { return (70 + (stage-1) * 8)  * difficulty.spdMult; }
     function bossHp()      { return Math.max(5, Math.round((30 + (stage-1) * 20) * difficulty.hpMult)); }
-    function spawnBase()   { return Math.max(0.3, (1.8 - (stage-1) * 0.12) * difficulty.spawnMult); }
+    function spawnBase()   { const b = Math.max(0.3, (1.8 - (stage-1) * 0.12) * difficulty.spawnMult); return stageConfig().modifier === 'dense_spawn' ? b * 0.6 : b; }
     function palette()     { return PALETTES[Math.min(stage-1, PALETTES.length-1)]; }
     function contactDmg()  { return (12 + (stage-1) * 3) * difficulty.dmgMult; }
     function blobFireInterval() { return Math.max(2.0, 5.5 - (stage-1) * 0.35); }
@@ -262,6 +289,7 @@ export default function Game() {
           const cx = dCardX(i), cy = dCardY(i);
           if (mx >= cx && mx <= cx+cw && my >= cy && my <= cy+ch) {
             difficulty = DIFFICULTIES[i];
+            stageIntroTimer = 2.5;
             gameState  = 'playing';
             canvas.style.cursor = 'none';
           }
@@ -332,14 +360,20 @@ export default function Game() {
         side === 1 ? { x: W+m,             y: Math.random()*H } :
         side === 2 ? { x: Math.random()*W, y: H+m } :
                      { x: -m,              y: Math.random()*H };
-      const hp = blobHp();
-      blobs.push({ id: uid++, pos, radius: 14, hp, maxHp: hp, fireTimer: Math.random() * blobFireInterval() });
+      const et     = stageConfig().enemyType;
+      const radius = et === 'swarm' ? 8 : et === 'tank' ? 22 : 14;
+      const hpMult = et === 'swarm' ? 0.5 : et === 'tank' ? 2.5 : 1.0;
+      const dodge  = et === 'ghost' ? 0.4 : 0;
+      const hp = Math.max(1, Math.round(blobHp() * hpMult));
+      blobs.push({ id: uid++, pos, radius, hp, maxHp: hp, fireTimer: Math.random() * blobFireInterval(), enemyType: et, dodgeChance: dodge, spawnsChildren: et === 'splitter' });
     }
 
     function spawnBoss() {
-      const hp = bossHp();
-      boss = { id: uid++, pos: { x: canvas.width/2, y: -70 }, radius: 52, hp, maxHp: hp };
+      const hp  = bossHp();
+      const pat = stageConfig().bossPattern;
+      boss = { id: uid++, pos: { x: canvas.width/2, y: -70 }, radius: 52, hp, maxHp: hp, pattern: pat };
       bossFireTimer = 1.2;
+      bossOrbitAngle = 0; bossChargeVel = null; bossChargeTimer = 3; bossTeleportTimer = 4; bossSummonTimer = 6;
     }
 
     function fireBulletForWeapon(w: WeaponStats) {
@@ -363,7 +397,7 @@ export default function Game() {
           vel: { x: Math.cos(base)*w.bulletSpeed, y: Math.sin(base)*w.bulletSpeed },
           pierceLeft: 99, bounceLeft: 0, explodeR: w.explodeR,
           weaponType: 'railgun', maxRange: 0, distTraveled: 0,
-          homingStrength: 0, bulletSize: w.bulletSize,
+          homingStrength: 0, bulletSize: w.bulletSize, ghostDodged: new Set<number>(),
         });
         return;
       }
@@ -379,7 +413,7 @@ export default function Game() {
           vel: { x: Math.cos(a)*spd, y: Math.sin(a)*spd },
           pierceLeft: w.piercing, bounceLeft: w.bouncing, explodeR: w.explodeR,
           weaponType: w.type, maxRange: w.range, distTraveled: 0,
-          homingStrength: w.homingStrength, bulletSize: w.bulletSize,
+          homingStrength: w.homingStrength, bulletSize: w.bulletSize, ghostDodged: new Set<number>(),
         });
       }
     }
@@ -427,6 +461,8 @@ export default function Game() {
       blobs = []; boss = null; bullets = []; enemyBullets = []; xpOrbs = []; explosions = []; floaters = []; railgunFlashes = [];
       killCount = 0; spawnTimer = 0; bossFireTimer = 0; gameTime = 0; invTimer = 0; shieldRegenDelay = 0;
       for (const w of weapons) w.fireTimer = 0;
+      stageIntroTimer = 2.5; bossOrbitAngle = 0; bossChargeVel = null; bossChargeTimer = 3;
+      bossTeleportTimer = 4; bossSummonTimer = 6; berserkTimer = 0; berserkActive = false;
       player.hp = Math.min(player.maxHp, player.hp + player.maxHp * 0.35);
       gameState = 'playing';
       canvas.style.cursor = 'none';
@@ -443,6 +479,8 @@ export default function Game() {
       xp = 0; level = 0; xpToNext = 12;
       blobs = []; boss = null; bullets = []; enemyBullets = []; xpOrbs = []; explosions = []; floaters = []; railgunFlashes = [];
       killCount = 0; spawnTimer = 0; bossFireTimer = 0; gameTime = 0; invTimer = 0; damageFlash = 0; shieldRegenDelay = 0;
+      stageIntroTimer = 0; bossOrbitAngle = 0; bossChargeVel = null; bossChargeTimer = 3;
+      bossTeleportTimer = 4; bossSummonTimer = 6; berserkTimer = 0; berserkActive = false;
       gameState = 'start';
       canvas.style.cursor = 'default';
     }
@@ -474,13 +512,19 @@ export default function Game() {
     function drawBlob(b: Blob) {
       const pal = palette();
       const hr  = b.hp / b.maxHp;
+      let fog = 1;
+      if (stageConfig().modifier === 'fog') {
+        const dist = d(b.pos, ship);
+        fog = dist < 150 ? 1 : dist > 350 ? 0 : 1 - (dist-150)/200;
+      }
+      if (fog <= 0) return;
       ctx.save();
       ctx.translate(b.pos.x, b.pos.y);
       ctx.shadowColor = pal.glow; ctx.shadowBlur = 12;
       ctx.fillStyle   = pal.blob;
-      ctx.globalAlpha = 0.5 + 0.5 * hr;
+      ctx.globalAlpha = fog * (0.5 + 0.5 * hr);
       ctx.beginPath(); ctx.arc(0,0,b.radius,0,Math.PI*2); ctx.fill();
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = fog;
       ctx.shadowBlur  = 0;
       ctx.fillStyle   = '#ffcccc';
       ctx.beginPath();
@@ -633,7 +677,7 @@ export default function Game() {
       // stage label (top center, subtle)
       ctx.textAlign = 'center'; ctx.fillStyle = '#223344';
       ctx.font = '10px "Courier New",monospace';
-      ctx.fillText(`STAGE  ${stage} / 10`, W/2, 10);
+      ctx.fillText(`STAGE ${stage} / 10 — ${stageConfig().name}${berserkActive ? '  ⚡BERSERK' : ''}`, W/2, 10);
 
       // XP bar (bottom center)
       const barW = Math.min(420, W*0.5), barX = (W-barW)/2, barY = H-30;
@@ -757,6 +801,29 @@ export default function Game() {
       ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.textAlign = 'left';
     }
 
+    function drawStageIntro() {
+      const cfg = stageConfig();
+      const t   = stageIntroTimer / 2.5; // 1→0 as banner fades
+      const a   = t > 0.85 ? (1-t)/0.15 : t < 0.15 ? t/0.15 : 1;
+      const W   = canvas.width, H = canvas.height;
+      ctx.save();
+      ctx.globalAlpha = a * 0.72;
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, H/2-64, W, 128);
+      ctx.globalAlpha = a;
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#334455'; ctx.font = '12px "Courier New",monospace';
+      ctx.fillText(`— STAGE ${stage} —`, W/2, H/2-32);
+      ctx.fillStyle = '#00ffcc'; ctx.shadowColor = '#00ffcc'; ctx.shadowBlur = 22;
+      ctx.font = `bold ${Math.min(38, W*0.065)}px "Courier New",monospace`;
+      ctx.fillText(cfg.name, W/2, H/2+10);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#667788'; ctx.font = '12px "Courier New",monospace';
+      ctx.fillText(cfg.tagline, W/2, H/2+34);
+      ctx.restore();
+      ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.textAlign = 'left';
+    }
+
     function drawStartScreen() {
       const W = canvas.width, H = canvas.height;
       ctx.fillStyle = 'rgba(0,0,8,0.88)'; ctx.fillRect(0,0,W,H);
@@ -798,23 +865,27 @@ export default function Game() {
 
     function drawBetweenStage() {
       const W = canvas.width, H = canvas.height;
+      const nextCfg = STAGE_CONFIGS[Math.min(stage, STAGE_CONFIGS.length-1)];
       ctx.fillStyle = 'rgba(0,0,8,0.85)'; ctx.fillRect(0,0,W,H);
       ctx.textAlign = 'center';
       ctx.fillStyle = '#ffff00'; ctx.shadowColor = '#ffff00'; ctx.shadowBlur = 28;
       ctx.font = 'bold 38px "Courier New",monospace';
-      ctx.fillText(`★  STAGE ${stage-1} COMPLETE  ★`, W/2, H/2-145);
+      ctx.fillText(`★  STAGE ${stage} COMPLETE  ★`, W/2, H/2-145);
       ctx.shadowBlur = 0;
-      ctx.fillStyle = '#aabbcc'; ctx.font = '14px "Courier New",monospace';
-      ctx.fillText(`Entering Stage ${stage} — choose a permanent upgrade:`, W/2, H/2-100);
+      ctx.fillStyle = '#00ffcc'; ctx.shadowColor = '#00ffcc'; ctx.shadowBlur = 8;
+      ctx.font = 'bold 18px "Courier New",monospace';
+      ctx.fillText(`ENTERING: ${nextCfg.name}`, W/2, H/2-108);
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#556677'; ctx.font = '11px "Courier New",monospace';
+      ctx.fillText(nextCfg.tagline, W/2, H/2-88);
+      ctx.fillStyle = '#aabbcc'; ctx.font = '13px "Courier New",monospace';
+      ctx.fillText(`Choose a permanent upgrade:`, W/2, H/2-66);
       const cy = wCardY();
       const accent = (cat: string) => cat === 'weapon' ? '#004488' : cat === 'stat' ? '#225500' : '#442200';
       for (let i = 0; i < upgradeChoices.length; i++)
         drawCard(wCardX(i), cy, CW, CH, upgradeChoices[i], accent(upgradeChoices[i].category));
       ctx.fillStyle = '#334455'; ctx.font = '10px "Courier New",monospace';
-      ctx.fillText(
-        `Stage ${stage}:  enemies ${blobHp()} HP · ${Math.round(blobSpd())} spd · ${killsNeeded()} kills for boss · boss ${bossHp()} HP`,
-        W/2, cy + CH + 28
-      );
+      ctx.fillText(`Enemy type: ${nextCfg.enemyType.toUpperCase()}  ·  Boss: ${nextCfg.bossPattern.toUpperCase()}  ·  Modifier: ${nextCfg.modifier.replace(/_/g,' ').toUpperCase()}`, W/2, cy + CH + 28);
       ctx.textAlign = 'left';
     }
 
@@ -845,8 +916,16 @@ export default function Game() {
       const W = canvas.width, H = canvas.height;
 
       if (gameState === 'playing') {
+        stageIntroTimer = Math.max(0, stageIntroTimer - dt);
         ship.x += (mouse.x - ship.x) * player.speed;
         ship.y += (mouse.y - ship.y) * player.speed;
+
+        // berserk cycle
+        if (stageConfig().modifier === 'berserk') {
+          berserkTimer += dt;
+          if (berserkTimer >= 11) berserkTimer = 0;
+          berserkActive = berserkTimer >= 8;
+        } else { berserkActive = false; }
 
         // spawn blobs
         gameTime   += dt;
@@ -857,26 +936,74 @@ export default function Game() {
         // boss trigger
         if (!boss && killCount >= killsNeeded()) spawnBoss();
 
-        // move blobs
-        const bs = blobSpd();
+        // enemy HP regen
+        if (stageConfig().modifier === 'regen_enemies')
+          for (const b of blobs) b.hp = Math.min(b.maxHp, b.hp + 0.5*dt);
+
+        // move blobs — per-type speed multipliers + berserk
+        const baseSpd = blobSpd() * (berserkActive ? 1.6 : 1.0);
         for (const b of blobs) {
+          const sm = b.enemyType === 'swarm' ? 1.4 : b.enemyType === 'tank' ? 0.55 : 1.0;
+          const bs = baseSpd * sm;
           const dx = ship.x-b.pos.x, dy = ship.y-b.pos.y;
           const len = Math.sqrt(dx*dx+dy*dy) || 1;
           b.pos.x += (dx/len)*bs*dt; b.pos.y += (dy/len)*bs*dt;
         }
 
-        // move boss
+        // move boss — per-pattern behavior
         if (boss) {
-          const dx = ship.x-boss.pos.x, dy = ship.y-boss.pos.y;
-          const len = Math.sqrt(dx*dx+dy*dy) || 1;
-          boss.pos.x += (dx/len)*38*dt; boss.pos.y += (dy/len)*38*dt;
+          if (boss.pattern === 'chase') {
+            const dx = ship.x-boss.pos.x, dy = ship.y-boss.pos.y;
+            const len = Math.sqrt(dx*dx+dy*dy) || 1;
+            boss.pos.x += (dx/len)*38*dt; boss.pos.y += (dy/len)*38*dt;
+          } else if (boss.pattern === 'orbit') {
+            bossOrbitAngle += dt * 0.9;
+            const orbitR = 200;
+            const tx = ship.x + Math.cos(bossOrbitAngle)*orbitR;
+            const ty = ship.y + Math.sin(bossOrbitAngle)*orbitR;
+            const dx = tx-boss.pos.x, dy = ty-boss.pos.y;
+            const len = Math.sqrt(dx*dx+dy*dy) || 1;
+            boss.pos.x += (dx/len)*90*dt; boss.pos.y += (dy/len)*90*dt;
+          } else if (boss.pattern === 'charge') {
+            bossChargeTimer -= dt;
+            if (bossChargeTimer <= 0 && !bossChargeVel) {
+              const dx = ship.x-boss.pos.x, dy = ship.y-boss.pos.y;
+              const len = Math.sqrt(dx*dx+dy*dy) || 1;
+              bossChargeVel = { x:(dx/len)*340, y:(dy/len)*340 };
+              bossChargeTimer = 2.5;
+            }
+            if (bossChargeVel) {
+              boss.pos.x += bossChargeVel.x*dt; boss.pos.y += bossChargeVel.y*dt;
+              bossChargeVel.x *= Math.pow(0.04, dt); bossChargeVel.y *= Math.pow(0.04, dt);
+              if (Math.abs(bossChargeVel.x) < 5) bossChargeVel = null;
+            }
+          } else if (boss.pattern === 'summon') {
+            const dx = ship.x-boss.pos.x, dy = ship.y-boss.pos.y;
+            const len = Math.sqrt(dx*dx+dy*dy) || 1;
+            boss.pos.x += (dx/len)*22*dt; boss.pos.y += (dy/len)*22*dt;
+            bossSummonTimer -= dt;
+            if (bossSummonTimer <= 0) { bossSummonTimer = 5; for (let i = 0; i < 3; i++) spawnBlob(); }
+          } else if (boss.pattern === 'teleport') {
+            bossTeleportTimer -= dt;
+            if (bossTeleportTimer <= 0) {
+              bossTeleportTimer = 4;
+              boss.pos.x = 80 + Math.random()*(canvas.width-160);
+              boss.pos.y = 80 + Math.random()*(canvas.height-160);
+            }
+            const dx = ship.x-boss.pos.x, dy = ship.y-boss.pos.y;
+            const len = Math.sqrt(dx*dx+dy*dy) || 1;
+            boss.pos.x += (dx/len)*28*dt; boss.pos.y += (dy/len)*28*dt;
+          }
         }
 
         // player contact damage
         invTimer = Math.max(0, invTimer - dt);
         const dmg = contactDmg();
         for (const b of blobs) {
-          if (d(ship, b.pos) < b.radius+12) { damagePlayer(dmg); break; }
+          if (d(ship, b.pos) < b.radius+12) {
+            const dm = b.enemyType === 'tank' ? 2.0 : b.enemyType === 'swarm' ? 0.5 : 1.0;
+            damagePlayer(dmg * dm); break;
+          }
         }
         if (boss && d(ship, boss.pos) < boss.radius+14) damagePlayer(dmg * 2);
 
@@ -906,15 +1033,25 @@ export default function Game() {
         }
 
         // bullet ↔ blob collision
-        const deadBlobs   = new Set<number>();
-        const deadBullets = new Set<number>();
+        const deadBlobs      = new Set<number>();
+        const deadBullets    = new Set<number>();
         const pendingExp: Array<{ pos: Vec2; r: number }> = [];
+        const splitterSpawns: Vec2[] = [];
 
         for (const b of bullets) {
           if (deadBullets.has(b.id)) continue;
           for (const blob of blobs) {
             if (deadBlobs.has(blob.id)) continue;
             if (d(b.pos, blob.pos) >= blob.radius + 4 * b.bulletSize) continue;
+            // ghost dodge: roll once per bullet per ghost encounter
+            if (blob.dodgeChance > 0 && !b.ghostDodged.has(blob.id)) {
+              if (Math.random() < blob.dodgeChance) {
+                b.ghostDodged.add(blob.id);
+                addFloater({ x: blob.pos.x, y: blob.pos.y - blob.radius }, 'MISS', '#88aacc');
+                continue;
+              }
+              b.ghostDodged.add(blob.id); // successfully hit, mark so we don't re-roll
+            }
             const crit = player.critChance > 0 && Math.random() < player.critChance;
             const baseDmg = bulletDmg(b.weaponType) * player.damage * (crit ? player.critMult : 1.0);
             blob.hp -= baseDmg;
@@ -924,7 +1061,7 @@ export default function Game() {
               crit ? '#ffff44' : '#aabbcc'
             );
             const killed = blob.hp <= 0;
-            if (killed) deadBlobs.add(blob.id);
+            if (killed) { deadBlobs.add(blob.id); if (blob.spawnsChildren) splitterSpawns.push({ ...blob.pos }); }
             if (b.explodeR > 0) {
               if (killed) pendingExp.push({ pos: { ...blob.pos }, r: b.explodeR });
               deadBullets.add(b.id);
@@ -983,13 +1120,27 @@ export default function Game() {
           }
         }
 
-        // kill count + orbs + vampire
+        // kill count + orbs + vampire + modifiers
         killCount += deadBlobs.size;
         if (vampireHeal > 0 && deadBlobs.size > 0)
           player.hp = Math.min(player.maxHp, player.hp + deadBlobs.size * vampireHeal);
-        for (const blob of blobs)
-          if (deadBlobs.has(blob.id))
+        for (const blob of blobs) {
+          if (deadBlobs.has(blob.id)) {
             xpOrbs.push({ id: uid++, pos: { x: blob.pos.x+(Math.random()-0.5)*16, y: blob.pos.y+(Math.random()-0.5)*16 } });
+            if (stageConfig().modifier === 'explosive_death')
+              explosions.push({ id: uid++, pos: { ...blob.pos }, age: 0, maxR: 55 });
+          }
+        }
+        // splitter: spawn 2 mini-blobs per dead splitter parent
+        for (const sp of splitterSpawns) {
+          for (let i = 0; i < 2; i++) {
+            const a = Math.random()*Math.PI*2;
+            const mhp = Math.max(1, Math.round(blobHp() * 0.4));
+            blobs.push({ id: uid++, pos: { x: sp.x+Math.cos(a)*22, y: sp.y+Math.sin(a)*22 },
+              radius: 8, hp: mhp, maxHp: mhp, fireTimer: 2,
+              enemyType: 'splitter', dodgeChance: 0, spawnsChildren: false });
+          }
+        }
         blobs   = blobs.filter(b => !deadBlobs.has(b.id));
         bullets = bullets.filter(b => !deadBullets.has(b.id));
         bullets = bullets.filter(b =>
@@ -1014,7 +1165,7 @@ export default function Game() {
           if (dist < PULL) { const s = 160+(PULL-dist)*2.5; o.pos.x += (dx/dist)*s*dt; o.pos.y += (dy/dist)*s*dt; }
           if (dist < 14) got.push(o.id);
         }
-        if (got.length) { xpOrbs = xpOrbs.filter(o => !got.includes(o.id)); addXp(got.length * player.xpMult); }
+        if (got.length) { xpOrbs = xpOrbs.filter(o => !got.includes(o.id)); const dm = stageConfig().modifier === 'xp_drought' ? 0.5 : 1; addXp(got.length * player.xpMult * dm); }
 
         // HP & shield regen
         if (player.regen > 0) player.hp = Math.min(player.maxHp, player.hp + player.regen*dt);
@@ -1088,6 +1239,7 @@ export default function Game() {
 
         drawFloaters();
         drawHud();
+        if (stageIntroTimer > 0) drawStageIntro();
       }
 
       if      (gameState === 'start')         drawStartScreen();
