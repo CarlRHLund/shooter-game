@@ -1023,9 +1023,15 @@ export default function Game() {
               const dx = tp.x-b.pos.x, dy = tp.y-b.pos.y;
               const len = Math.sqrt(dx*dx+dy*dy) || 1;
               const spd = Math.sqrt(b.vel.x**2+b.vel.y**2);
-              const hf  = b.homingStrength * dt;
-              b.vel.x += (dx/len*spd - b.vel.x) * hf;
-              b.vel.y += (dy/len*spd - b.vel.y) * hf;
+              if (spd > 0) {
+                const hf = b.homingStrength * dt;
+                b.vel.x += (dx/len*spd - b.vel.x) * hf;
+                b.vel.y += (dy/len*spd - b.vel.y) * hf;
+                // renormalize to preserve speed — lerping velocity vectors bleeds speed on sharp turns
+                const newSpd = Math.sqrt(b.vel.x**2+b.vel.y**2) || 1;
+                b.vel.x = b.vel.x/newSpd * spd;
+                b.vel.y = b.vel.y/newSpd * spd;
+              }
             }
           }
           if (b.maxRange > 0) b.distTraveled += Math.sqrt(b.vel.x**2+b.vel.y**2) * dt;
