@@ -10,8 +10,17 @@ interface Boss      { id: number; pos: Vec2; radius: number; hp: number; maxHp: 
 interface XpOrb     { id: number; pos: Vec2 }
 interface Explosion { id: number; pos: Vec2; age: number; maxR: number }
 interface Bullet    { id: number; pos: Vec2; vel: Vec2; pierceLeft: number; bounceLeft: number; explodeR: number }
-interface WeaponStats { fireInterval: number; multiShot: number; explodeR: number; piercing: number; bouncing: number }
-interface PlayerStats { hp: number; maxHp: number; armor: number; regen: number; speed: number }
+interface WeaponStats {
+  fireInterval: number; multiShot: number; explodeR: number; piercing: number; bouncing: number;
+  bulletSpeed: number; bulletSize: number; range: number; damage: number;
+}
+interface PlayerStats {
+  hp: number; maxHp: number; armor: number; regen: number; speed: number;
+  damage: number; critChance: number; critMult: number;
+  shield: number; maxShield: number; shieldRegen: number;
+  dodge: number; xpRange: number; xpMult: number;
+}
+interface Floater   { pos: Vec2; text: string; age: number; maxAge: number; color: string }
 interface Upgrade    { id: string; name: string; desc: string }
 interface Difficulty { id: string; name: string; desc: string; color: string; hpMult: number; spdMult: number; dmgMult: number; spawnMult: number }
 
@@ -100,8 +109,16 @@ export default function Game() {
 
     // ── persistent state (survives stage transitions) ──────────────────────
     let stage  = 1;
-    const player: PlayerStats = { hp: 100, maxHp: 100, armor: 0, regen: 0, speed: 0.14 };
-    const weapon: WeaponStats = { fireInterval: 0.28, multiShot: 0, explodeR: 0, piercing: 0, bouncing: 0 };
+    const player: PlayerStats = {
+      hp: 100, maxHp: 100, armor: 0, regen: 0, speed: 0.14,
+      damage: 1.0, critChance: 0, critMult: 2.0,
+      shield: 0, maxShield: 0, shieldRegen: 0,
+      dodge: 0, xpRange: 160, xpMult: 1.0,
+    };
+    const weapon: WeaponStats = {
+      fireInterval: 0.28, multiShot: 0, explodeR: 0, piercing: 0, bouncing: 0,
+      bulletSpeed: 520, bulletSize: 1.0, range: 0, damage: 1.0,
+    };
     let xp = 0, level = 0, xpToNext = 12;
 
     // ── per-stage state ────────────────────────────────────────────────────
@@ -115,8 +132,10 @@ export default function Game() {
     let fireTimer  = 0;
     let gameTime   = 0;
     let killCount  = 0;
-    let invTimer   = 0;  // invincibility after hit
-    let damageFlash = 0;
+    let invTimer        = 0;
+    let damageFlash     = 0;
+    let shieldRegenDelay = 0;
+    let floaters: Floater[] = [];
 
     // ── UI state ───────────────────────────────────────────────────────────
     let gameState: GameState = 'start';
@@ -252,7 +271,7 @@ export default function Game() {
       const count  = 1 + weapon.multiShot;
       const spread = weapon.multiShot > 0 ? 0.18 : 0;
       const half   = spread * (count-1) / 2;
-      const spd    = 520;
+      const spd    = weapon.bulletSpeed;
       for (let i = 0; i < count; i++) {
         const a = base - half + spread*i;
         bullets.push({
@@ -263,10 +282,27 @@ export default function Game() {
       }
     }
 
+    function addFloater(pos: Vec2, text: string, color: string, maxAge = 0.9) {
+      floaters.push({ pos: { ...pos }, text, age: 0, maxAge, color });
+    }
+
     function damagePlayer(amount: number) {
       if (invTimer > 0) return;
+      if (player.dodge > 0 && Math.random() < player.dodge) {
+        addFloater({ x: ship.x, y: ship.y - 16 }, 'DODGE', '#00ffff', 1.1);
+        invTimer = 0.25;
+        return;
+      }
       const eff = amount * (1 - player.armor);
-      player.hp = Math.max(0, player.hp - eff);
+      if (player.shield > 0) {
+        const absorbed = Math.min(player.shield, eff);
+        player.shield -= absorbed;
+        const rem = eff - absorbed;
+        player.hp = Math.max(0, player.hp - rem);
+        shieldRegenDelay = 3;
+      } else {
+        player.hp = Math.max(0, player.hp - eff);
+      }
       invTimer    = 0.5;
       damageFlash = 1;
       if (player.hp <= 0) { gameState = 'game_over'; canvas.style.cursor = 'default'; }
@@ -287,8 +323,8 @@ export default function Game() {
 
     function startNextStage() {
       stage++;
-      blobs = []; boss = null; bullets = []; xpOrbs = []; explosions = [];
-      killCount = 0; spawnTimer = 0; fireTimer = 0; gameTime = 0; invTimer = 0;
+      blobs = []; boss = null; bullets = []; xpOrbs = []; explosions = []; floaters = [];
+      killCount = 0; spawnTimer = 0; fireTimer = 0; gameTime = 0; invTimer = 0; shieldRegenDelay = 0;
       // partial heal between stages
       player.hp   = Math.min(player.maxHp, player.hp + player.maxHp * 0.35);
       gameState   = 'playing';
@@ -298,10 +334,14 @@ export default function Game() {
     function restartGame() {
       stage  = 1;
       player.hp = 100; player.maxHp = 100; player.armor = 0; player.regen = 0; player.speed = 0.14;
+      player.damage = 1.0; player.critChance = 0; player.critMult = 2.0;
+      player.shield = 0; player.maxShield = 0; player.shieldRegen = 0;
+      player.dodge = 0; player.xpRange = 160; player.xpMult = 1.0;
       weapon.fireInterval = 0.28; weapon.multiShot = 0; weapon.explodeR = 0; weapon.piercing = 0; weapon.bouncing = 0;
+      weapon.bulletSpeed = 520; weapon.bulletSize = 1.0; weapon.range = 0; weapon.damage = 1.0;
       xp = 0; level = 0; xpToNext = 12;
-      blobs = []; boss = null; bullets = []; xpOrbs = []; explosions = [];
-      killCount = 0; spawnTimer = 0; fireTimer = 0; gameTime = 0; invTimer = 0; damageFlash = 0;
+      blobs = []; boss = null; bullets = []; xpOrbs = []; explosions = []; floaters = [];
+      killCount = 0; spawnTimer = 0; fireTimer = 0; gameTime = 0; invTimer = 0; damageFlash = 0; shieldRegenDelay = 0;
       gameState = 'start';
       canvas.style.cursor = 'default';
     }
@@ -398,7 +438,7 @@ export default function Game() {
       ctx.fillStyle = bg; ctx.fillRect(barX, barY, barW*hr, 16);
       ctx.strokeStyle = '#440044'; ctx.lineWidth = 1; ctx.strokeRect(barX, barY, barW, 16);
       ctx.fillStyle = '#ffffff'; ctx.font = 'bold 10px "Courier New",monospace';
-      ctx.fillText(`${b.hp} / ${b.maxHp}`, W/2, barY+12);
+      ctx.fillText(`${Math.ceil(b.hp)} / ${b.maxHp}`, W/2, barY+12);
       ctx.textAlign = 'left';
     }
 
@@ -463,12 +503,37 @@ export default function Game() {
       ctx.strokeStyle = '#440000'; ctx.lineWidth = 1; ctx.strokeRect(hpX, hpY, hpW, 14);
       ctx.textAlign = 'left'; ctx.fillStyle = '#cc8888'; ctx.font = '10px "Courier New",monospace';
       ctx.fillText(`HP  ${Math.ceil(player.hp)} / ${player.maxHp}`, hpX, hpY-4);
-      if (player.armor > 0 || player.regen > 0) {
+
+      // shield bar (above HP bar, only when maxShield > 0)
+      if (player.maxShield > 0) {
+        const shY = hpY - 18;
+        const shRatio = player.shield / player.maxShield;
+        ctx.fillStyle = '#00111a'; ctx.fillRect(hpX, shY, hpW, 10);
+        const shG = ctx.createLinearGradient(hpX, 0, hpX+hpW, 0);
+        shG.addColorStop(0, '#0066aa'); shG.addColorStop(1, '#00ccff');
+        ctx.fillStyle = shG; ctx.fillRect(hpX, shY, hpW*shRatio, 10);
+        ctx.strokeStyle = '#002233'; ctx.lineWidth = 1; ctx.strokeRect(hpX, shY, hpW, 10);
+        ctx.fillStyle = '#44aacc'; ctx.font = '9px "Courier New",monospace';
+        ctx.fillText(`SH  ${Math.ceil(player.shield)} / ${player.maxShield}`, hpX, shY-3);
+      }
+
+      // defence + regen stats
+      const defExtras: string[] = [];
+      if (player.armor  > 0) defExtras.push(`ARM ${Math.round(player.armor*100)}%`);
+      if (player.regen  > 0) defExtras.push(`REG ${player.regen.toFixed(1)}/s`);
+      if (player.dodge  > 0) defExtras.push(`DODGE ${Math.round(player.dodge*100)}%`);
+      if (defExtras.length) {
         ctx.fillStyle = '#445566'; ctx.font = '9px "Courier New",monospace';
-        const extras: string[] = [];
-        if (player.armor > 0) extras.push(`ARM ${Math.round(player.armor*100)}%`);
-        if (player.regen > 0) extras.push(`REG ${player.regen.toFixed(1)}/s`);
-        ctx.fillText(extras.join('  '), hpX, hpY+26);
+        ctx.fillText(defExtras.join('  '), hpX, hpY+26);
+      }
+
+      // offence stats (below defence line)
+      const offExtras: string[] = [];
+      if (player.damage   > 1.0) offExtras.push(`DMG ×${player.damage.toFixed(1)}`);
+      if (player.critChance > 0) offExtras.push(`CRIT ${Math.round(player.critChance*100)}%`);
+      if (offExtras.length) {
+        ctx.fillStyle = '#665544'; ctx.font = '9px "Courier New",monospace';
+        ctx.fillText(offExtras.join('  '), hpX, hpY + (defExtras.length ? 38 : 26));
       }
 
       // weapon readout (top left)
@@ -515,6 +580,24 @@ export default function Game() {
       }
       ctx.fillStyle = '#223344'; ctx.font = '9px "Courier New",monospace';
       ctx.fillText('[ CLICK ]', cx+cw/2, cy+ch-12);
+    }
+
+    function drawFloaters() {
+      ctx.save();
+      ctx.textAlign = 'center';
+      for (const f of floaters) {
+        const t = f.age / f.maxAge;
+        ctx.globalAlpha = Math.max(0, 1 - t);
+        ctx.fillStyle = f.color;
+        ctx.shadowColor = f.color; ctx.shadowBlur = 6;
+        const big = f.text === 'CRIT!' || f.text === 'DODGE';
+        ctx.font = `bold ${big ? 14 : 11}px "Courier New",monospace`;
+        ctx.fillText(f.text, f.pos.x, f.pos.y);
+      }
+      ctx.restore();
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur  = 0;
+      ctx.textAlign   = 'left';
     }
 
     function drawStartScreen() {
@@ -652,8 +735,15 @@ export default function Game() {
           if (deadBullets.has(b.id)) continue;
           for (const blob of blobs) {
             if (deadBlobs.has(blob.id)) continue;
-            if (d(b.pos, blob.pos) >= blob.radius+4) continue;
-            blob.hp--;
+            if (d(b.pos, blob.pos) >= blob.radius + 4 * weapon.bulletSize) continue;
+            const crit = player.critChance > 0 && Math.random() < player.critChance;
+            const dmg  = weapon.damage * player.damage * (crit ? player.critMult : 1.0);
+            blob.hp -= dmg;
+            addFloater(
+              { x: blob.pos.x + (Math.random()-0.5)*8, y: blob.pos.y - blob.radius },
+              crit ? 'CRIT!' : Math.ceil(dmg).toString(),
+              crit ? '#ffff44' : '#aabbcc'
+            );
             const killed = blob.hp <= 0;
             if (killed) deadBlobs.add(blob.id);
             if (b.explodeR > 0) {
@@ -685,8 +775,15 @@ export default function Game() {
         if (boss) {
           for (const b of bullets) {
             if (deadBullets.has(b.id)) continue;
-            if (d(b.pos, boss.pos) >= boss.radius+4) continue;
-            boss.hp--;
+            if (d(b.pos, boss.pos) >= boss.radius + 4 * weapon.bulletSize) continue;
+            const crit = player.critChance > 0 && Math.random() < player.critChance;
+            const dmg  = weapon.damage * player.damage * (crit ? player.critMult : 1.0);
+            boss.hp -= dmg;
+            addFloater(
+              { x: boss.pos.x + (Math.random()-0.5)*20, y: boss.pos.y - boss.radius },
+              crit ? 'CRIT!' : Math.ceil(dmg).toString(),
+              crit ? '#ffff44' : '#dd88ff'
+            );
             if (b.explodeR > 0) {
               explosions.push({ id: uid++, pos: { ...boss.pos }, age: 0, maxR: b.explodeR });
               deadBullets.add(b.id);
@@ -721,7 +818,7 @@ export default function Game() {
         for (const e of explosions) e.age += dt;
 
         // XP orb pull & collect
-        const PULL = 160;
+        const PULL = player.xpRange;
         const got: number[] = [];
         for (const o of xpOrbs) {
           const dx = ship.x-o.pos.x, dy = ship.y-o.pos.y;
@@ -729,11 +826,18 @@ export default function Game() {
           if (dist < PULL) { const s = 160+(PULL-dist)*2.5; o.pos.x += (dx/dist)*s*dt; o.pos.y += (dy/dist)*s*dt; }
           if (dist < 14) got.push(o.id);
         }
-        if (got.length) { xpOrbs = xpOrbs.filter(o => !got.includes(o.id)); addXp(got.length); }
+        if (got.length) { xpOrbs = xpOrbs.filter(o => !got.includes(o.id)); addXp(got.length * player.xpMult); }
 
-        // HP regen
+        // HP & shield regen
         if (player.regen > 0) player.hp = Math.min(player.maxHp, player.hp + player.regen*dt);
+        shieldRegenDelay = Math.max(0, shieldRegenDelay - dt);
+        if (player.maxShield > 0 && player.shield < player.maxShield && shieldRegenDelay <= 0)
+          player.shield = Math.min(player.maxShield, player.shield + player.shieldRegen * dt);
       }
+
+      // floaters animate regardless of game state
+      for (const f of floaters) { f.pos.y -= 35*dt; f.age += dt; }
+      floaters = floaters.filter(f => f.age < f.maxAge);
 
       // ── render ──────────────────────────────────────────────────────────
       ctx.fillStyle = palette().bg; ctx.fillRect(0,0,W,H);
@@ -756,6 +860,7 @@ export default function Game() {
           damageFlash = Math.max(0, damageFlash - dt*5);
         }
 
+        drawFloaters();
         drawHud();
       }
 
