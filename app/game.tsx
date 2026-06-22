@@ -5,14 +5,15 @@ import { useEffect, useRef } from 'react';
 // ── types ─────────────────────────────────────────────────────────────────────
 interface Vec2      { x: number; y: number }
 interface Star      { x: number; y: number; size: number; bright: number }
-interface Blob      { id: number; pos: Vec2; radius: number; hp: number; maxHp: number }
-interface Boss      { id: number; pos: Vec2; radius: number; hp: number; maxHp: number }
-interface XpOrb     { id: number; pos: Vec2 }
-interface Explosion { id: number; pos: Vec2; age: number; maxR: number }
-interface Bullet    { id: number; pos: Vec2; vel: Vec2; pierceLeft: number; bounceLeft: number; explodeR: number }
+interface Blob        { id: number; pos: Vec2; radius: number; hp: number; maxHp: number; fireTimer: number }
+interface Boss        { id: number; pos: Vec2; radius: number; hp: number; maxHp: number }
+interface XpOrb       { id: number; pos: Vec2 }
+interface Explosion   { id: number; pos: Vec2; age: number; maxR: number }
+interface Bullet      { id: number; pos: Vec2; vel: Vec2; pierceLeft: number; bounceLeft: number; explodeR: number }
+interface EnemyBullet { id: number; pos: Vec2; vel: Vec2; dmg: number }
 interface WeaponStats {
   fireInterval: number; multiShot: number; explodeR: number; piercing: number; bouncing: number;
-  bulletSpeed: number; bulletSize: number; range: number; damage: number;
+  bulletSpeed: number; bulletSize: number; range: number; damage: number; homingStrength: number;
 }
 interface PlayerStats {
   hp: number; maxHp: number; armor: number; regen: number; speed: number;
@@ -21,24 +22,34 @@ interface PlayerStats {
   dodge: number; xpRange: number; xpMult: number;
 }
 interface Floater   { pos: Vec2; text: string; age: number; maxAge: number; color: string }
-interface Upgrade    { id: string; name: string; desc: string }
+interface Upgrade    { id: string; name: string; desc: string; maxTaken: number; category: 'weapon' | 'stat' | 'passive' }
 interface Difficulty { id: string; name: string; desc: string; color: string; hpMult: number; spdMult: number; dmgMult: number; spawnMult: number }
 
 type GameState = 'start' | 'playing' | 'upgrading' | 'between_stage' | 'game_over';
 
-// ── upgrade pools ─────────────────────────────────────────────────────────────
-const WEAPON_UPS: Upgrade[] = [
-  { id: 'rapid',     name: 'RAPID FIRE',       desc: 'Fire rate +33%' },
-  { id: 'multi',     name: 'MULTI SHOT',        desc: '+2 extra bullets' },
-  { id: 'explosive', name: 'EXPLOSIVE ROUNDS',  desc: 'Bullets explode on impact (+60r)' },
-  { id: 'piercing',  name: 'PIERCING SHOT',     desc: 'Bullets pierce +2 enemies' },
-  { id: 'bouncing',  name: 'BOUNCING SHOT',     desc: 'Bullets bounce to next enemy' },
-];
-const BASE_UPS: Upgrade[] = [
-  { id: 'max_hp', name: 'MAX HEALTH',  desc: '+25 max HP  ·  full restore' },
-  { id: 'regen',  name: 'HP REGEN',    desc: '+1.5 HP per second' },
-  { id: 'speed',  name: 'MOVE SPEED',  desc: 'Ship speed +15%' },
-  { id: 'armor',  name: 'ARMOR',       desc: '-10% incoming damage' },
+// ── upgrade pool ──────────────────────────────────────────────────────────────
+const UPGRADE_POOL: Upgrade[] = [
+  // weapon modifiers
+  { id: 'rapid',       name: 'RAPID FIRE',     desc: 'Fire rate +33%',                  maxTaken: 4, category: 'weapon'  },
+  { id: 'multi',       name: 'MULTI SHOT',     desc: '+2 extra bullets',                maxTaken: 3, category: 'weapon'  },
+  { id: 'explosive',   name: 'EXPLOSIVE',      desc: 'Bullets explode · +60r radius',   maxTaken: 3, category: 'weapon'  },
+  { id: 'piercing',    name: 'PIERCING SHOT',  desc: 'Bullets pierce +2 enemies',       maxTaken: 3, category: 'weapon'  },
+  { id: 'bouncing',    name: 'BOUNCING SHOT',  desc: 'Bullets bounce · next target',    maxTaken: 2, category: 'weapon'  },
+  { id: 'storm',       name: 'BULLET STORM',   desc: '+4 bullets · rate +20%',          maxTaken: 2, category: 'weapon'  },
+  { id: 'homing',      name: 'HOMING ROUNDS',  desc: 'Bullets curve toward enemies',    maxTaken: 2, category: 'weapon'  },
+  // stat upgrades
+  { id: 'max_hp',      name: 'MAX HEALTH',     desc: '+30 max HP · full restore',       maxTaken: 4, category: 'stat'    },
+  { id: 'regen',       name: 'HP REGEN',       desc: '+2 HP per second',                maxTaken: 4, category: 'stat'    },
+  { id: 'speed',       name: 'MOVE SPEED',     desc: 'Ship speed +15%',                 maxTaken: 4, category: 'stat'    },
+  { id: 'armor',       name: 'ARMOR',          desc: '-10% incoming damage',            maxTaken: 4, category: 'stat'    },
+  { id: 'dodge',       name: 'DODGE ROLL',     desc: '+8% chance to evade all hits',    maxTaken: 3, category: 'stat'    },
+  { id: 'crit',        name: 'CRIT BOOST',     desc: '+10% critical hit chance',        maxTaken: 3, category: 'stat'    },
+  // passives
+  { id: 'shield',      name: 'SHIELD CELL',    desc: '+40 shield · +2/s regen',         maxTaken: 3, category: 'passive' },
+  { id: 'xp_magnet',   name: 'XP MAGNET',      desc: 'Pull range +80 · orbs faster',   maxTaken: 3, category: 'passive' },
+  { id: 'double_xp',   name: 'DOUBLE XP',      desc: 'XP earned ×1.5',                 maxTaken: 2, category: 'passive' },
+  { id: 'bullet_size', name: 'BULLET SIZE',    desc: 'Bullets larger · bigger hitbox',  maxTaken: 3, category: 'passive' },
+  { id: 'vampire',     name: 'VAMPIRE',        desc: 'Each kill heals 0.5 HP',          maxTaken: 3, category: 'passive' },
 ];
 
 const DIFFICULTIES: Difficulty[] = [
@@ -74,19 +85,6 @@ function makeStars(w: number, h: number): Star[] {
 function pickN<T>(pool: T[], n: number): T[] {
   return [...pool].sort(() => Math.random()-0.5).slice(0, n);
 }
-function applyWeapon(id: string, w: WeaponStats) {
-  if (id === 'rapid')     w.fireInterval  = Math.max(0.07, w.fireInterval * 0.67);
-  if (id === 'multi')     w.multiShot     = Math.min(w.multiShot + 2, 8);
-  if (id === 'explosive') w.explodeR     += 60;
-  if (id === 'piercing')  w.piercing     += 2;
-  if (id === 'bouncing')  w.bouncing      = Math.min(w.bouncing + 1, 3);
-}
-function applyBase(id: string, p: PlayerStats) {
-  if (id === 'max_hp') { p.maxHp += 25; p.hp = p.maxHp; }
-  if (id === 'regen')  { p.regen += 1.5; }
-  if (id === 'speed')  { p.speed  = Math.min(0.35, p.speed * 1.15); }
-  if (id === 'armor')  { p.armor  = Math.min(0.5, p.armor + 0.1); }
-}
 
 // ── component ─────────────────────────────────────────────────────────────────
 export default function Game() {
@@ -117,43 +115,80 @@ export default function Game() {
     };
     const weapon: WeaponStats = {
       fireInterval: 0.28, multiShot: 0, explodeR: 0, piercing: 0, bouncing: 0,
-      bulletSpeed: 520, bulletSize: 1.0, range: 0, damage: 1.0,
+      bulletSpeed: 520, bulletSize: 1.0, range: 0, damage: 1.0, homingStrength: 0,
     };
+    let vampireHeal    = 0;
+    const upgradeTaken = new Map<string, number>();
     let xp = 0, level = 0, xpToNext = 12;
 
     // ── per-stage state ────────────────────────────────────────────────────
-    let blobs:      Blob[]      = [];
-    let boss:       Boss | null = null;
-    let bullets:    Bullet[]    = [];
-    let xpOrbs:     XpOrb[]     = [];
-    let explosions: Explosion[]  = [];
-    let uid        = 0;
-    let spawnTimer = 0;
-    let fireTimer  = 0;
-    let gameTime   = 0;
-    let killCount  = 0;
-    let invTimer        = 0;
-    let damageFlash     = 0;
+    let blobs:        Blob[]        = [];
+    let boss:         Boss | null   = null;
+    let bullets:      Bullet[]      = [];
+    let enemyBullets: EnemyBullet[] = [];
+    let xpOrbs:       XpOrb[]       = [];
+    let explosions:   Explosion[]   = [];
+    let uid          = 0;
+    let spawnTimer   = 0;
+    let fireTimer    = 0;
+    let bossFireTimer = 0;
+    let gameTime     = 0;
+    let killCount    = 0;
+    let invTimer         = 0;
+    let damageFlash      = 0;
     let shieldRegenDelay = 0;
     let floaters: Floater[] = [];
 
     // ── UI state ───────────────────────────────────────────────────────────
     let gameState: GameState = 'start';
     let difficulty: Difficulty = DIFFICULTIES[1];
-    let weaponChoices: Upgrade[] = [];
-    let baseChoices:   Upgrade[] = [];
+    let upgradeChoices: Upgrade[] = [];
 
     const mouse: Vec2 = { x: canvas.width/2, y: canvas.height/2 };
     const ship:  Vec2 = { x: canvas.width/2, y: canvas.height/2 };
 
     // ── stage scaling ──────────────────────────────────────────────────────
+    function pickNFromPool(n: number): Upgrade[] {
+      const available = UPGRADE_POOL.filter(u => (upgradeTaken.get(u.id) || 0) < u.maxTaken);
+      return [...available].sort(() => Math.random()-0.5).slice(0, n);
+    }
+    function applyUpgrade(id: string) {
+      // weapon modifiers
+      if (id === 'rapid')       weapon.fireInterval   = Math.max(0.07, weapon.fireInterval * 0.67);
+      if (id === 'multi')       weapon.multiShot      = Math.min(weapon.multiShot + 2, 8);
+      if (id === 'explosive')   weapon.explodeR      += 60;
+      if (id === 'piercing')    weapon.piercing      += 2;
+      if (id === 'bouncing')    weapon.bouncing       = Math.min(weapon.bouncing + 1, 3);
+      if (id === 'storm')     { weapon.fireInterval   = Math.max(0.09, weapon.fireInterval * 0.8); weapon.multiShot = Math.min(weapon.multiShot + 4, 12); }
+      if (id === 'homing')      weapon.homingStrength = Math.min(3.0, weapon.homingStrength + 1.5);
+      if (id === 'bullet_size') weapon.bulletSize    *= 1.3;
+      // stat
+      if (id === 'max_hp') { player.maxHp += 30; player.hp = player.maxHp; }
+      if (id === 'regen')    player.regen      += 2;
+      if (id === 'speed')    player.speed       = Math.min(0.35, player.speed * 1.15);
+      if (id === 'armor')    player.armor       = Math.min(0.5,  player.armor + 0.1);
+      if (id === 'dodge')    player.dodge       = Math.min(0.35, player.dodge + 0.08);
+      if (id === 'crit')     player.critChance  = Math.min(0.4,  player.critChance + 0.1);
+      // passive
+      if (id === 'shield')    { player.maxShield += 40; player.shield = player.maxShield; player.shieldRegen += 2; }
+      if (id === 'xp_magnet')   player.xpRange  += 80;
+      if (id === 'double_xp')   player.xpMult    = Math.min(3.0, player.xpMult * 1.5);
+      if (id === 'vampire')     vampireHeal      += 0.5;
+      upgradeTaken.set(id, (upgradeTaken.get(id) || 0) + 1);
+    }
+
     function killsNeeded() { return 20 + (stage-1) * 5; }
     function blobHp()      { return Math.max(1, Math.round((3  + (stage-1) * 2)  * difficulty.hpMult)); }
     function blobSpd()     { return (70 + (stage-1) * 8)  * difficulty.spdMult; }
     function bossHp()      { return Math.max(5, Math.round((30 + (stage-1) * 20) * difficulty.hpMult)); }
     function spawnBase()   { return Math.max(0.3, (1.8 - (stage-1) * 0.12) * difficulty.spawnMult); }
     function palette()     { return PALETTES[Math.min(stage-1, PALETTES.length-1)]; }
-    function contactDmg()  { return (12 + (stage-1) * 3) * difficulty.dmgMult; }
+    function contactDmg()     { return (12 + (stage-1) * 3) * difficulty.dmgMult; }
+    function blobFireInterval() { return Math.max(2.0, 5.5 - (stage-1) * 0.35); }
+    function blobFireSpd()      { return 150 + (stage-1) * 10; }
+    function blobFireDmg()      { return contactDmg() * 0.4; }
+    function bossFireInterval() { return boss && boss.hp / boss.maxHp < 0.5 ? 0.7 : 1.4; }
+    function bossFireSpd()      { return 200 + (stage-1) * 8; }
 
     // ── card layout ────────────────────────────────────────────────────────
     // difficulty select (responsive: 2×2 on narrow screens, 1×4 on wide)
@@ -172,9 +207,6 @@ export default function Game() {
     function wCardX(i: number) { return (canvas.width-(3*CW+2*CG))/2 + i*(CW+CG); }
     function wCardY()          { return canvas.height/2 - 55; }
 
-    const BCW = 165, BCH = 148, BCG = 18;
-    function bCardX(i: number) { return (canvas.width-(4*BCW+3*BCG))/2 + i*(BCW+BCG); }
-    function bCardY()          { return canvas.height/2 - 50; }
 
     // ── input ──────────────────────────────────────────────────────────────
     const onMove = (e: MouseEvent) => {
@@ -206,20 +238,20 @@ export default function Game() {
         }
       } else if (gameState === 'upgrading') {
         const cy = wCardY();
-        for (let i = 0; i < weaponChoices.length; i++) {
+        for (let i = 0; i < upgradeChoices.length; i++) {
           const cx = wCardX(i);
           if (mx >= cx && mx <= cx+CW && my >= cy && my <= cy+CH) {
-            applyWeapon(weaponChoices[i].id, weapon);
+            applyUpgrade(upgradeChoices[i].id);
             gameState = 'playing';
             canvas.style.cursor = 'none';
           }
         }
       } else if (gameState === 'between_stage') {
-        const cy = bCardY();
-        for (let i = 0; i < baseChoices.length; i++) {
-          const cx = bCardX(i);
-          if (mx >= cx && mx <= cx+BCW && my >= cy && my <= cy+BCH) {
-            applyBase(baseChoices[i].id, player);
+        const cy = wCardY();
+        for (let i = 0; i < upgradeChoices.length; i++) {
+          const cx = wCardX(i);
+          if (mx >= cx && mx <= cx+CW && my >= cy && my <= cy+CH) {
+            applyUpgrade(upgradeChoices[i].id);
             startNextStage();
           }
         }
@@ -234,6 +266,13 @@ export default function Game() {
     canvas.addEventListener('touchmove',  onTouchMove,  { passive: false });
 
     // ── game logic ─────────────────────────────────────────────────────────
+    function nearestTarget(from: Vec2): Vec2 | null {
+      const nb = nearestBlob(from);
+      if (nb) return nb.pos;
+      if (boss) return boss.pos;
+      return null;
+    }
+
     function nearestBlob(from: Vec2, exclude?: Set<number>): Blob | null {
       let best: Blob | null = null, bestD = Infinity;
       for (const b of blobs) {
@@ -254,12 +293,13 @@ export default function Game() {
         side === 2 ? { x: Math.random()*W, y: H+m } :
                      { x: -m,              y: Math.random()*H };
       const hp = blobHp();
-      blobs.push({ id: uid++, pos, radius: 14, hp, maxHp: hp });
+      blobs.push({ id: uid++, pos, radius: 14, hp, maxHp: hp, fireTimer: Math.random() * blobFireInterval() });
     }
 
     function spawnBoss() {
       const hp = bossHp();
       boss = { id: uid++, pos: { x: canvas.width/2, y: -70 }, radius: 52, hp, maxHp: hp };
+      bossFireTimer = 1.2; // grace period before first shot
     }
 
     function fireBullet() {
@@ -310,10 +350,10 @@ export default function Game() {
 
     function levelUp() {
       level++;
-      xpToNext    = 12 + level * 10;
-      gameState   = 'upgrading';
-      weaponChoices = pickN(WEAPON_UPS, 3);
-      fireTimer   = 0;
+      xpToNext      = 12 + level * 10;
+      gameState     = 'upgrading';
+      upgradeChoices = pickNFromPool(3);
+      fireTimer     = 0;
       canvas.style.cursor = 'default';
     }
     function addXp(n: number) {
@@ -323,8 +363,8 @@ export default function Game() {
 
     function startNextStage() {
       stage++;
-      blobs = []; boss = null; bullets = []; xpOrbs = []; explosions = []; floaters = [];
-      killCount = 0; spawnTimer = 0; fireTimer = 0; gameTime = 0; invTimer = 0; shieldRegenDelay = 0;
+      blobs = []; boss = null; bullets = []; enemyBullets = []; xpOrbs = []; explosions = []; floaters = [];
+      killCount = 0; spawnTimer = 0; fireTimer = 0; bossFireTimer = 0; gameTime = 0; invTimer = 0; shieldRegenDelay = 0;
       // partial heal between stages
       player.hp   = Math.min(player.maxHp, player.hp + player.maxHp * 0.35);
       gameState   = 'playing';
@@ -338,10 +378,11 @@ export default function Game() {
       player.shield = 0; player.maxShield = 0; player.shieldRegen = 0;
       player.dodge = 0; player.xpRange = 160; player.xpMult = 1.0;
       weapon.fireInterval = 0.28; weapon.multiShot = 0; weapon.explodeR = 0; weapon.piercing = 0; weapon.bouncing = 0;
-      weapon.bulletSpeed = 520; weapon.bulletSize = 1.0; weapon.range = 0; weapon.damage = 1.0;
+      weapon.bulletSpeed = 520; weapon.bulletSize = 1.0; weapon.range = 0; weapon.damage = 1.0; weapon.homingStrength = 0;
+      vampireHeal = 0; upgradeTaken.clear();
       xp = 0; level = 0; xpToNext = 12;
-      blobs = []; boss = null; bullets = []; xpOrbs = []; explosions = []; floaters = [];
-      killCount = 0; spawnTimer = 0; fireTimer = 0; gameTime = 0; invTimer = 0; damageFlash = 0; shieldRegenDelay = 0;
+      blobs = []; boss = null; bullets = []; enemyBullets = []; xpOrbs = []; explosions = []; floaters = [];
+      killCount = 0; spawnTimer = 0; fireTimer = 0; bossFireTimer = 0; gameTime = 0; invTimer = 0; damageFlash = 0; shieldRegenDelay = 0;
       gameState = 'start';
       canvas.style.cursor = 'default';
     }
@@ -440,6 +481,16 @@ export default function Game() {
       ctx.fillStyle = '#ffffff'; ctx.font = 'bold 10px "Courier New",monospace';
       ctx.fillText(`${Math.ceil(b.hp)} / ${b.maxHp}`, W/2, barY+12);
       ctx.textAlign = 'left';
+    }
+
+    function drawEnemyBullet(eb: EnemyBullet) {
+      ctx.save();
+      ctx.shadowColor = '#ff4400'; ctx.shadowBlur = 10;
+      ctx.fillStyle   = '#ff6633';
+      ctx.beginPath(); ctx.arc(eb.pos.x, eb.pos.y, 4, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#ffaa88'; ctx.shadowBlur = 0;
+      ctx.beginPath(); ctx.arc(eb.pos.x-1, eb.pos.y-1, 1.5, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
     }
 
     function drawBullet(b: Bullet) {
@@ -544,6 +595,7 @@ export default function Game() {
         `EXPLO ${weapon.explodeR >0 ? `r${weapon.explodeR}` : '—'}`,
         `PIERC ${weapon.piercing >0 ? weapon.piercing : '—'}`,
         `BNCE  ${weapon.bouncing >0 ? weapon.bouncing : '—'}`,
+        `HOME  ${weapon.homingStrength>0 ? `×${weapon.homingStrength.toFixed(1)}` : '—'}`,
       ].forEach((l, i) => { ctx.fillStyle = '#334455'; ctx.fillText(l, 12, 22+i*15); });
 
       // kill progress (top right, before boss spawns)
@@ -617,7 +669,7 @@ export default function Game() {
       const { cw, ch } = diffLayout();
       for (let i = 0; i < DIFFICULTIES.length; i++) {
         const diff = DIFFICULTIES[i];
-        drawCard(dCardX(i), dCardY(i), cw, ch, { id: diff.id, name: diff.name, desc: diff.desc }, diff.color);
+        drawCard(dCardX(i), dCardY(i), cw, ch, { id: diff.id, name: diff.name, desc: diff.desc, maxTaken: 1, category: 'stat' }, diff.color);
       }
       ctx.textAlign = 'left';
     }
@@ -631,10 +683,11 @@ export default function Game() {
       ctx.fillText('✦ LEVEL UP ✦', W/2, H/2-130);
       ctx.shadowBlur = 0;
       ctx.fillStyle = '#8899aa'; ctx.font = '13px "Courier New",monospace';
-      ctx.fillText('Choose a weapon upgrade:', W/2, H/2-95);
+      ctx.fillText('Choose an upgrade:', W/2, H/2-95);
       const cy = wCardY();
-      for (let i = 0; i < weaponChoices.length; i++)
-        drawCard(wCardX(i), cy, CW, CH, weaponChoices[i], '#004488');
+      const accent = (cat: string) => cat === 'weapon' ? '#004488' : cat === 'stat' ? '#225500' : '#442200';
+      for (let i = 0; i < upgradeChoices.length; i++)
+        drawCard(wCardX(i), cy, CW, CH, upgradeChoices[i], accent(upgradeChoices[i].category));
       ctx.textAlign = 'left';
     }
 
@@ -648,14 +701,14 @@ export default function Game() {
       ctx.shadowBlur = 0;
       ctx.fillStyle = '#aabbcc'; ctx.font = '14px "Courier New",monospace';
       ctx.fillText(`Entering Stage ${stage} — choose a permanent upgrade:`, W/2, H/2-100);
-      const cy = bCardY();
-      for (let i = 0; i < baseChoices.length; i++)
-        drawCard(bCardX(i), cy, BCW, BCH, baseChoices[i], '#005500');
-      // next-stage difficulty preview
+      const cy = wCardY();
+      const accent = (cat: string) => cat === 'weapon' ? '#004488' : cat === 'stat' ? '#225500' : '#442200';
+      for (let i = 0; i < upgradeChoices.length; i++)
+        drawCard(wCardX(i), cy, CW, CH, upgradeChoices[i], accent(upgradeChoices[i].category));
       ctx.fillStyle = '#334455'; ctx.font = '10px "Courier New",monospace';
       ctx.fillText(
-        `Stage ${stage}:  enemies ${blobHp()} HP · ${blobSpd()} speed · ${killsNeeded()} kills for boss · boss ${bossHp()} HP`,
-        W/2, cy + BCH + 28
+        `Stage ${stage}:  enemies ${blobHp()} HP · ${Math.round(blobSpd())} spd · ${killsNeeded()} kills for boss · boss ${bossHp()} HP`,
+        W/2, cy + CH + 28
       );
       ctx.textAlign = 'left';
     }
@@ -723,8 +776,21 @@ export default function Game() {
         fireTimer += dt;
         if (fireTimer >= weapon.fireInterval && (blobs.length || boss)) { fireTimer = 0; fireBullet(); }
 
-        // move bullets
-        for (const b of bullets) { b.pos.x += b.vel.x*dt; b.pos.y += b.vel.y*dt; }
+        // move bullets (with optional homing)
+        for (const b of bullets) {
+          if (weapon.homingStrength > 0) {
+            const tp = nearestTarget(b.pos);
+            if (tp) {
+              const dx = tp.x-b.pos.x, dy = tp.y-b.pos.y;
+              const len = Math.sqrt(dx*dx+dy*dy) || 1;
+              const spd = Math.sqrt(b.vel.x**2+b.vel.y**2);
+              const hf  = weapon.homingStrength * dt;
+              b.vel.x += (dx/len*spd - b.vel.x) * hf;
+              b.vel.y += (dy/len*spd - b.vel.y) * hf;
+            }
+          }
+          b.pos.x += b.vel.x*dt; b.pos.y += b.vel.y*dt;
+        }
 
         // bullet ↔ blob collision
         const deadBlobs   = new Set<number>();
@@ -796,16 +862,18 @@ export default function Game() {
               if (stage >= 10) {
                 gameState = 'game_over'; canvas.style.cursor = 'default';
               } else {
-                baseChoices = pickN(BASE_UPS, 4);
-                gameState   = 'between_stage'; canvas.style.cursor = 'default';
+                upgradeChoices = pickNFromPool(3);
+                gameState      = 'between_stage'; canvas.style.cursor = 'default';
               }
               break;
             }
           }
         }
 
-        // kill count + orbs
+        // kill count + orbs + vampire
         killCount += deadBlobs.size;
+        if (vampireHeal > 0 && deadBlobs.size > 0)
+          player.hp = Math.min(player.maxHp, player.hp + deadBlobs.size * vampireHeal);
         for (const blob of blobs)
           if (deadBlobs.has(blob.id))
             xpOrbs.push({ id: uid++, pos: { x: blob.pos.x+(Math.random()-0.5)*16, y: blob.pos.y+(Math.random()-0.5)*16 } });
@@ -833,6 +901,42 @@ export default function Game() {
         shieldRegenDelay = Math.max(0, shieldRegenDelay - dt);
         if (player.maxShield > 0 && player.shield < player.maxShield && shieldRegenDelay <= 0)
           player.shield = Math.min(player.maxShield, player.shield + player.shieldRegen * dt);
+
+        // blobs fire back
+        const bfi = blobFireInterval(), bfs = blobFireSpd(), bfd = blobFireDmg();
+        for (const b of blobs) {
+          b.fireTimer -= dt;
+          if (b.fireTimer <= 0 && d(b.pos, ship) < 500) {
+            b.fireTimer = bfi * (0.8 + Math.random() * 0.4);
+            const dx = ship.x-b.pos.x, dy = ship.y-b.pos.y;
+            const len = Math.sqrt(dx*dx+dy*dy) || 1;
+            enemyBullets.push({ id: uid++, pos: { ...b.pos }, vel: { x:(dx/len)*bfs, y:(dy/len)*bfs }, dmg: bfd });
+          }
+        }
+
+        // boss fires spread shots
+        if (boss) {
+          bossFireTimer -= dt;
+          if (bossFireTimer <= 0) {
+            bossFireTimer = bossFireInterval();
+            const dx = ship.x-boss.pos.x, dy = ship.y-boss.pos.y;
+            const base = Math.atan2(dy, dx), spd = bossFireSpd();
+            for (let i = -1; i <= 1; i++) {
+              const a = base + i * 0.28;
+              enemyBullets.push({ id: uid++, pos: { ...boss.pos }, vel: { x:Math.cos(a)*spd, y:Math.sin(a)*spd }, dmg: contactDmg() * 0.55 });
+            }
+          }
+        }
+
+        // move enemy bullets & check player collision
+        for (const eb of enemyBullets) { eb.pos.x += eb.vel.x*dt; eb.pos.y += eb.vel.y*dt; }
+        const hitEB = new Set<number>();
+        for (const eb of enemyBullets) {
+          if (d(eb.pos, ship) < 12) { damagePlayer(eb.dmg); hitEB.add(eb.id); }
+        }
+        enemyBullets = enemyBullets.filter(eb =>
+          !hitEB.has(eb.id) && eb.pos.x>-30 && eb.pos.x<W+30 && eb.pos.y>-30 && eb.pos.y<H+30
+        );
       }
 
       // floaters animate regardless of game state
@@ -847,6 +951,7 @@ export default function Game() {
       for (const bl of blobs)     drawBlob(bl);
       if (boss) drawBoss(boss);
       for (const b of bullets)    drawBullet(b);
+      for (const eb of enemyBullets) drawEnemyBullet(eb);
 
       if (gameState !== 'start') {
         const nb  = nearestBlob(ship);
