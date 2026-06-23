@@ -32,6 +32,16 @@ interface PlayerStats {
 interface Floater    { pos: Vec2; text: string; age: number; maxAge: number; color: string }
 interface Upgrade    { id: string; name: string; desc: string; maxTaken: number; category: 'weapon' | 'stat' | 'passive' }
 interface Difficulty { id: string; name: string; desc: string; color: string; hpMult: number; spdMult: number; dmgMult: number; spawnMult: number }
+type ItemSlot   = 'hull' | 'drive' | 'core';
+type ItemRarity = 'common' | 'rare' | 'epic';
+interface Item {
+  id: string; name: string; slot: ItemSlot; rarity: ItemRarity; desc: string;
+  hpAdd?: number; regenAdd?: number; armorAdd?: number; speedAdd?: number;
+  dodgeAdd?: number; xpRangeAdd?: number; critAdd?: number;
+  shieldAdd?: number; shieldRegenAdd?: number;
+  xpMultMult?: number; damageMult?: number;
+  wFireMult?: number; wMultiAdd?: number;
+}
 
 type GameState = 'start' | 'playing' | 'upgrading' | 'between_stage' | 'game_over';
 
@@ -98,6 +108,31 @@ const STAGE_CONFIGS: StageConfig[] = [
   { name: 'PULSE',      tagline: 'BERSERK AT INTERVALS',    modifier: 'berserk',         enemyType: 'standard', bossPattern: 'chase'    },
   { name: 'SIEGE',      tagline: 'ENDLESS ARMADA',          modifier: 'dense_spawn',     enemyType: 'tank',     bossPattern: 'summon'   },
   { name: 'ENDGAME',    tagline: 'NO MERCY',                modifier: 'none',            enemyType: 'standard', bossPattern: 'charge'   },
+];
+
+// ── item pool ─────────────────────────────────────────────────────────────────
+const ITEM_POOL: Item[] = [
+  // hull — defensive
+  { id: 'iron_plating',  name: 'IRON PLATING',  slot: 'hull',  rarity: 'common', desc: '+25 max HP',                              hpAdd: 25 },
+  { id: 'repair_gel',    name: 'REPAIR GEL',    slot: 'hull',  rarity: 'common', desc: '+2.5 HP regen per second',                regenAdd: 2.5 },
+  { id: 'hard_shell',    name: 'HARD SHELL',    slot: 'hull',  rarity: 'common', desc: '-12% incoming damage',                    armorAdd: 0.12 },
+  { id: 'deflector',     name: 'DEFLECTOR',     slot: 'hull',  rarity: 'rare',   desc: '+60 shield · +3/s regen',                 shieldAdd: 60, shieldRegenAdd: 3 },
+  { id: 'ablative_coat', name: 'ABLATIVE COAT', slot: 'hull',  rarity: 'rare',   desc: '+25 HP · -18% damage taken',              hpAdd: 25, armorAdd: 0.18 },
+  { id: 'void_carapace', name: 'VOID CARAPACE', slot: 'hull',  rarity: 'epic',   desc: '+50 HP · -20% dmg · +10% dodge',          hpAdd: 50, armorAdd: 0.20, dodgeAdd: 0.10 },
+  // drive — mobility / utility
+  { id: 'thruster',      name: 'THRUSTER',      slot: 'drive', rarity: 'common', desc: 'Ship speed +18%',                         speedAdd: 0.025 },
+  { id: 'xp_siphon',    name: 'XP SIPHON',     slot: 'drive', rarity: 'common', desc: '+80 XP pull range',                       xpRangeAdd: 80 },
+  { id: 'lucky_charm',  name: 'LUCKY CHARM',   slot: 'drive', rarity: 'common', desc: '+8% chance to dodge all hits',             dodgeAdd: 0.08 },
+  { id: 'phase_drive',  name: 'PHASE DRIVE',   slot: 'drive', rarity: 'rare',   desc: '+15% dodge · speed +18%',                  dodgeAdd: 0.15, speedAdd: 0.025 },
+  { id: 'xp_doubler',  name: 'XP DOUBLER',    slot: 'drive', rarity: 'rare',   desc: 'XP earned ×1.6',                           xpMultMult: 1.6 },
+  { id: 'fury_drive',  name: 'FURY DRIVE',     slot: 'drive', rarity: 'epic',   desc: '+20% dodge · +20% speed · XP ×1.5',        dodgeAdd: 0.20, speedAdd: 0.030, xpMultMult: 1.5 },
+  // core — offensive
+  { id: 'power_cell',   name: 'POWER CELL',    slot: 'core',  rarity: 'common', desc: 'All damage ×1.25',                         damageMult: 1.25 },
+  { id: 'targeting_ai', name: 'TARGETING AI',  slot: 'core',  rarity: 'common', desc: '+12% critical hit chance',                 critAdd: 0.12 },
+  { id: 'fast_loader',  name: 'FAST LOADER',   slot: 'core',  rarity: 'common', desc: 'All weapons fire rate +22%',               wFireMult: 0.82 },
+  { id: 'crit_matrix',  name: 'CRIT MATRIX',   slot: 'core',  rarity: 'rare',   desc: '+20% crit · damage ×1.2',                  critAdd: 0.20, damageMult: 1.2 },
+  { id: 'burst_core',   name: 'BURST CORE',    slot: 'core',  rarity: 'rare',   desc: 'All weapons +3 extra bullets',             wMultiAdd: 3 },
+  { id: 'fury_engine',  name: 'FURY ENGINE',   slot: 'core',  rarity: 'epic',   desc: 'Fire ×1.5 · dmg ×1.35 · +10% crit',       wFireMult: 0.667, damageMult: 1.35, critAdd: 0.10 },
 ];
 
 // ── weapon factories ──────────────────────────────────────────────────────────
@@ -174,6 +209,9 @@ export default function Game() {
     let bossSummonTimer   = 6;
     let berserkTimer  = 0;
     let berserkActive = false;
+    const equipped: Record<ItemSlot, Item | null> = { hull: null, drive: null, core: null };
+    let pendingItem: Item | null = null;
+    let itemDecided = false;
 
     // ── UI state ───────────────────────────────────────────────────────────
     let gameState: GameState = 'start';
@@ -219,6 +257,10 @@ export default function Game() {
         w.homingStrength = Math.min(3.0, w.homingStrength + (upgradeTaken.get('homing') || 0) * 1.5);
         const bs = upgradeTaken.get('bullet_size') || 0; for (let i = 0; i < bs; i++) w.bulletSize *= 1.3;
         weapons.push(w);
+        // apply any equipped CORE item weapon mods to the new weapon
+        const ci = equipped.core;
+        if (ci?.wFireMult) w.fireInterval = Math.max(0.05, w.fireInterval * ci.wFireMult);
+        if (ci?.wMultiAdd) w.multiShot    = Math.min(12,  w.multiShot + ci.wMultiAdd);
       }
       // stat
       if (id === 'max_hp') { player.maxHp += 30; player.hp = player.maxHp; }
@@ -233,6 +275,50 @@ export default function Game() {
       if (id === 'double_xp')   player.xpMult    = Math.min(3.0, player.xpMult * 1.5);
       if (id === 'vampire')     vampireHeal      += 0.5;
       upgradeTaken.set(id, (upgradeTaken.get(id) || 0) + 1);
+    }
+
+    function equipItem(item: Item) {
+      if (equipped[item.slot]) unequipItem(equipped[item.slot]!);
+      equipped[item.slot] = item;
+      if (item.hpAdd)         { player.maxHp += item.hpAdd;       player.hp     = Math.min(player.hp + item.hpAdd, player.maxHp); }
+      if (item.regenAdd)        player.regen      += item.regenAdd;
+      if (item.armorAdd)        player.armor       = Math.min(0.75, player.armor + item.armorAdd);
+      if (item.speedAdd)        player.speed       = Math.min(0.45, player.speed + item.speedAdd);
+      if (item.dodgeAdd)        player.dodge       = Math.min(0.60, player.dodge + item.dodgeAdd);
+      if (item.xpRangeAdd)      player.xpRange    += item.xpRangeAdd;
+      if (item.critAdd)         player.critChance  = Math.min(0.60, player.critChance + item.critAdd);
+      if (item.shieldAdd)     { player.maxShield  += item.shieldAdd; player.shield = Math.min(player.shield + item.shieldAdd, player.maxShield); }
+      if (item.shieldRegenAdd)  player.shieldRegen += item.shieldRegenAdd;
+      if (item.xpMultMult)      player.xpMult     *= item.xpMultMult;
+      if (item.damageMult)      player.damage     *= item.damageMult;
+      if (item.wFireMult) { const f = item.wFireMult; for (const w of weapons) w.fireInterval = Math.max(0.05, w.fireInterval * f); }
+      if (item.wMultiAdd) { const m = item.wMultiAdd;  for (const w of weapons) w.multiShot    = Math.min(12,  w.multiShot + m); }
+    }
+    function unequipItem(item: Item) {
+      equipped[item.slot] = null;
+      if (item.hpAdd)         { player.maxHp -= item.hpAdd;       player.hp     = Math.min(player.hp, player.maxHp); }
+      if (item.regenAdd)        player.regen      -= item.regenAdd;
+      if (item.armorAdd)        player.armor      -= item.armorAdd;
+      if (item.speedAdd)        player.speed      -= item.speedAdd;
+      if (item.dodgeAdd)        player.dodge      -= item.dodgeAdd;
+      if (item.xpRangeAdd)      player.xpRange    -= item.xpRangeAdd;
+      if (item.critAdd)         player.critChance -= item.critAdd;
+      if (item.shieldAdd)     { player.maxShield -= item.shieldAdd; player.shield = Math.min(player.shield, player.maxShield); }
+      if (item.shieldRegenAdd)  player.shieldRegen -= item.shieldRegenAdd;
+      if (item.xpMultMult)      player.xpMult     /= item.xpMultMult;
+      if (item.damageMult)      player.damage     /= item.damageMult;
+      if (item.wFireMult) { const f = item.wFireMult; for (const w of weapons) w.fireInterval = Math.min(2.0, w.fireInterval / f); }
+      if (item.wMultiAdd) { const m = item.wMultiAdd;  for (const w of weapons) w.multiShot    = Math.max(0,   w.multiShot - m); }
+    }
+    function rollItemDrop(): Item {
+      const r = Math.random();
+      let rarity: ItemRarity;
+      if      (stage <= 3) rarity = 'common';
+      else if (stage <= 6) rarity = r < 0.5 ? 'common' : 'rare';
+      else if (stage <= 9) rarity = r < 0.4 ? 'rare' : 'epic';
+      else                 rarity = 'epic';
+      const pool = ITEM_POOL.filter(i => i.rarity === rarity);
+      return pool[Math.floor(Math.random() * pool.length)];
     }
 
     function stageConfig() { return STAGE_CONFIGS[Math.min(stage-1, STAGE_CONFIGS.length-1)]; }
@@ -305,12 +391,25 @@ export default function Game() {
           }
         }
       } else if (gameState === 'between_stage') {
-        const cy = wCardY();
-        for (let i = 0; i < upgradeChoices.length; i++) {
-          const cx = wCardX(i);
-          if (mx >= cx && mx <= cx+CW && my >= cy && my <= cy+CH) {
-            applyUpgrade(upgradeChoices[i].id);
-            startNextStage();
+        const panelW = Math.min(400, canvas.width * 0.7), panelX = (canvas.width - Math.min(400, canvas.width * 0.7)) / 2;
+        const panelH = 115, panelY = 56, btnW = 100, btnH = 22;
+        const eqBtnX = panelX + 20, eqBtnY = panelY + panelH - 30;
+        const skBtnX = panelX + panelW - 120;
+        const cardAreaY = pendingItem ? 185 : 72;
+        const upgradeCardY = cardAreaY + 46;
+        if (!itemDecided && pendingItem) {
+          if (mx >= eqBtnX && mx <= eqBtnX+btnW && my >= eqBtnY && my <= eqBtnY+btnH)
+            { equipItem(pendingItem); itemDecided = true; }
+          else if (mx >= skBtnX && mx <= skBtnX+btnW && my >= eqBtnY && my <= eqBtnY+btnH)
+            { itemDecided = true; }
+        }
+        if (itemDecided || !pendingItem) {
+          for (let i = 0; i < upgradeChoices.length; i++) {
+            const cx = wCardX(i);
+            if (mx >= cx && mx <= cx+CW && my >= upgradeCardY && my <= upgradeCardY+CH) {
+              applyUpgrade(upgradeChoices[i].id);
+              startNextStage();
+            }
           }
         }
       } else if (gameState === 'game_over') {
@@ -463,6 +562,7 @@ export default function Game() {
       for (const w of weapons) w.fireTimer = 0;
       stageIntroTimer = 2.5; bossOrbitAngle = 0; bossChargeVel = null; bossChargeTimer = 3;
       bossTeleportTimer = 4; bossSummonTimer = 6; berserkTimer = 0; berserkActive = false;
+      pendingItem = null; itemDecided = false;
       player.hp = Math.min(player.maxHp, player.hp + player.maxHp * 0.35);
       gameState = 'playing';
       canvas.style.cursor = 'none';
@@ -481,6 +581,8 @@ export default function Game() {
       killCount = 0; spawnTimer = 0; bossFireTimer = 0; gameTime = 0; invTimer = 0; damageFlash = 0; shieldRegenDelay = 0;
       stageIntroTimer = 0; bossOrbitAngle = 0; bossChargeVel = null; bossChargeTimer = 3;
       bossTeleportTimer = 4; bossSummonTimer = 6; berserkTimer = 0; berserkActive = false;
+      equipped.hull = null; equipped.drive = null; equipped.core = null;
+      pendingItem = null; itemDecided = false;
       gameState = 'start';
       canvas.style.cursor = 'default';
     }
@@ -762,6 +864,27 @@ export default function Game() {
         ctx.strokeStyle = '#223344'; ctx.lineWidth = 1; ctx.strokeRect(bx, by, bw, 8);
         ctx.textAlign = 'left';
       }
+
+      // equipment strip — 3 slots, bottom right
+      const slotKeys: ItemSlot[] = ['hull', 'drive', 'core'];
+      const sw = 72, sh = 30, sg = 5;
+      const stripW = slotKeys.length * (sw+sg) - sg;
+      const stripX = W - stripW - 12, stripY = H - sh - 12;
+      ctx.font = '7px "Courier New",monospace'; ctx.textAlign = 'center';
+      for (let i = 0; i < slotKeys.length; i++) {
+        const s = slotKeys[i], sx = stripX + i*(sw+sg);
+        const eq = equipped[s];
+        const rc = eq ? (eq.rarity === 'epic' ? '#ff88ff' : eq.rarity === 'rare' ? '#4488ff' : '#88cc88') : '#1a2030';
+        ctx.fillStyle = eq ? (eq.rarity === 'epic' ? '#160022' : eq.rarity === 'rare' ? '#001022' : '#001810') : '#080c12';
+        ctx.fillRect(sx, stripY, sw, sh);
+        ctx.strokeStyle = rc; ctx.lineWidth = 1; ctx.strokeRect(sx, stripY, sw, sh);
+        ctx.fillStyle = '#334455'; ctx.font = '7px "Courier New",monospace';
+        ctx.fillText(s.toUpperCase(), sx+sw/2, stripY+10);
+        ctx.fillStyle = eq ? rc : '#334455'; ctx.font = 'bold 7px "Courier New",monospace';
+        ctx.fillText(eq ? eq.name.substring(0, 11) : '—', sx+sw/2, stripY+22);
+        ctx.font = '7px "Courier New",monospace';
+      }
+      ctx.textAlign = 'left';
     }
 
     function drawCard(cx: number, cy: number, cw: number, ch: number, up: Upgrade, accent: string) {
@@ -866,26 +989,95 @@ export default function Game() {
     function drawBetweenStage() {
       const W = canvas.width, H = canvas.height;
       const nextCfg = STAGE_CONFIGS[Math.min(stage, STAGE_CONFIGS.length-1)];
-      ctx.fillStyle = 'rgba(0,0,8,0.85)'; ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = 'rgba(0,0,8,0.88)'; ctx.fillRect(0,0,W,H);
       ctx.textAlign = 'center';
-      ctx.fillStyle = '#ffff00'; ctx.shadowColor = '#ffff00'; ctx.shadowBlur = 28;
-      ctx.font = 'bold 38px "Courier New",monospace';
-      ctx.fillText(`★  STAGE ${stage} COMPLETE  ★`, W/2, H/2-145);
+
+      // title
+      ctx.fillStyle = '#ffff00'; ctx.shadowColor = '#ffff00'; ctx.shadowBlur = 18;
+      ctx.font = `bold ${Math.min(28, W*0.048)}px "Courier New",monospace`;
+      ctx.fillText(`★  STAGE ${stage} COMPLETE  ★`, W/2, 42);
       ctx.shadowBlur = 0;
-      ctx.fillStyle = '#00ffcc'; ctx.shadowColor = '#00ffcc'; ctx.shadowBlur = 8;
-      ctx.font = 'bold 18px "Courier New",monospace';
-      ctx.fillText(`ENTERING: ${nextCfg.name}`, W/2, H/2-108);
+
+      // item drop panel
+      const panelW = Math.min(400, W * 0.7), panelX = (W - Math.min(400, W * 0.7)) / 2;
+      const panelH = 115, panelY = 56;
+      if (pendingItem) {
+        const rc = pendingItem.rarity === 'epic' ? '#ff88ff' : pendingItem.rarity === 'rare' ? '#4488ff' : '#88cc88';
+        ctx.fillStyle = '#040812'; ctx.strokeStyle = rc;
+        ctx.shadowColor = rc; ctx.shadowBlur = 10; ctx.lineWidth = 2;
+        ctx.fillRect(panelX, panelY, panelW, panelH); ctx.strokeRect(panelX, panelY, panelW, panelH);
+        ctx.shadowBlur = 0;
+        ctx.textAlign = 'left'; ctx.fillStyle = rc; ctx.font = 'bold 9px "Courier New",monospace';
+        ctx.fillText(`${pendingItem.rarity.toUpperCase()} · ${pendingItem.slot.toUpperCase()}`, panelX+10, panelY+14);
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#ffffff'; ctx.font = `bold 15px "Courier New",monospace`;
+        ctx.fillText(pendingItem.name, W/2, panelY+33);
+        ctx.fillStyle = '#8899aa'; ctx.font = '10px "Courier New",monospace';
+        ctx.fillText(pendingItem.desc, W/2, panelY+50);
+        const cur = equipped[pendingItem.slot];
+        if (cur) {
+          ctx.fillStyle = '#664422'; ctx.font = '9px "Courier New",monospace';
+          ctx.fillText(`Replaces: ${cur.name}`, W/2, panelY+65);
+        }
+        if (!itemDecided) {
+          const eqBtnX = panelX+20, eqBtnY = panelY+panelH-30, btnW = 100, btnH = 22;
+          ctx.fillStyle = '#003322'; ctx.strokeStyle = '#00ff88'; ctx.lineWidth = 1;
+          ctx.fillRect(eqBtnX, eqBtnY, btnW, btnH); ctx.strokeRect(eqBtnX, eqBtnY, btnW, btnH);
+          ctx.fillStyle = '#00ff88'; ctx.font = 'bold 10px "Courier New",monospace';
+          ctx.fillText('[ EQUIP ]', eqBtnX+btnW/2, eqBtnY+15);
+          const skBtnX = panelX+panelW-120, skBtnY = eqBtnY;
+          ctx.fillStyle = '#111122'; ctx.strokeStyle = '#334455'; ctx.lineWidth = 1;
+          ctx.fillRect(skBtnX, skBtnY, btnW, btnH); ctx.strokeRect(skBtnX, skBtnY, btnW, btnH);
+          ctx.fillStyle = '#556677'; ctx.font = 'bold 10px "Courier New",monospace';
+          ctx.fillText('[ SKIP ]', skBtnX+btnW/2, skBtnY+15);
+        } else {
+          ctx.fillStyle = '#445566'; ctx.font = '10px "Courier New",monospace';
+          ctx.fillText(equipped[pendingItem.slot] === pendingItem ? '✓ EQUIPPED' : '— SKIPPED —', W/2, panelY+panelH-10);
+        }
+      }
+
+      const cardAreaY = pendingItem ? 185 : 72;
+
+      // next stage info
+      ctx.fillStyle = '#00ffcc'; ctx.shadowColor = '#00ffcc'; ctx.shadowBlur = 6;
+      ctx.font = `bold 14px "Courier New",monospace`;
+      ctx.fillText(`ENTERING: ${nextCfg.name}`, W/2, cardAreaY);
       ctx.shadowBlur = 0;
-      ctx.fillStyle = '#556677'; ctx.font = '11px "Courier New",monospace';
-      ctx.fillText(nextCfg.tagline, W/2, H/2-88);
-      ctx.fillStyle = '#aabbcc'; ctx.font = '13px "Courier New",monospace';
-      ctx.fillText(`Choose a permanent upgrade:`, W/2, H/2-66);
-      const cy = wCardY();
+      ctx.fillStyle = '#556677'; ctx.font = '10px "Courier New",monospace';
+      ctx.fillText(nextCfg.tagline, W/2, cardAreaY+16);
+      ctx.fillStyle = '#334455'; ctx.font = '9px "Courier New",monospace';
+      ctx.fillText(`${nextCfg.enemyType.toUpperCase()} · ${nextCfg.bossPattern.toUpperCase()} boss · ${nextCfg.modifier.replace(/_/g,' ').toUpperCase()}`, W/2, cardAreaY+28);
+
+      const upgradeCardY = cardAreaY + 46;
+      const ready = itemDecided || !pendingItem;
+      ctx.fillStyle = ready ? '#aabbcc' : '#445566'; ctx.font = '11px "Courier New",monospace';
+      ctx.fillText(ready ? 'Choose a permanent upgrade:' : 'Resolve the item drop first ↑', W/2, upgradeCardY-8);
+
+      ctx.globalAlpha = ready ? 1 : 0.3;
       const accent = (cat: string) => cat === 'weapon' ? '#004488' : cat === 'stat' ? '#225500' : '#442200';
       for (let i = 0; i < upgradeChoices.length; i++)
-        drawCard(wCardX(i), cy, CW, CH, upgradeChoices[i], accent(upgradeChoices[i].category));
-      ctx.fillStyle = '#334455'; ctx.font = '10px "Courier New",monospace';
-      ctx.fillText(`Enemy type: ${nextCfg.enemyType.toUpperCase()}  ·  Boss: ${nextCfg.bossPattern.toUpperCase()}  ·  Modifier: ${nextCfg.modifier.replace(/_/g,' ').toUpperCase()}`, W/2, cy + CH + 28);
+        drawCard(wCardX(i), upgradeCardY, CW, CH, upgradeChoices[i], accent(upgradeChoices[i].category));
+      ctx.globalAlpha = 1;
+
+      // equipment readout
+      const readoutY = upgradeCardY + CH + 14;
+      const slotKeys: ItemSlot[] = ['hull', 'drive', 'core'];
+      const sw2 = 108, sh2 = 36, sg2 = 12;
+      const totalW2 = slotKeys.length * (sw2+sg2) - sg2;
+      const readX = (W - totalW2) / 2;
+      ctx.font = '9px "Courier New",monospace';
+      for (let i = 0; i < slotKeys.length; i++) {
+        const s = slotKeys[i], sx = readX + i*(sw2+sg2);
+        const eq = equipped[s];
+        const rc = eq ? (eq.rarity === 'epic' ? '#ff88ff' : eq.rarity === 'rare' ? '#4488ff' : '#88cc88') : '#223344';
+        ctx.fillStyle = '#040810'; ctx.strokeStyle = rc; ctx.lineWidth = 1;
+        ctx.fillRect(sx, readoutY, sw2, sh2); ctx.strokeRect(sx, readoutY, sw2, sh2);
+        ctx.fillStyle = '#334455'; ctx.textAlign = 'center';
+        ctx.fillText(s.toUpperCase(), sx+sw2/2, readoutY+12);
+        ctx.fillStyle = eq ? rc : '#334455'; ctx.font = 'bold 9px "Courier New",monospace';
+        ctx.fillText(eq ? eq.name : '—', sx+sw2/2, readoutY+26);
+        ctx.font = '9px "Courier New",monospace';
+      }
       ctx.textAlign = 'left';
     }
 
@@ -1119,6 +1311,7 @@ export default function Game() {
                 gameState = 'game_over'; canvas.style.cursor = 'default';
               } else {
                 upgradeChoices = pickNFromPool(3);
+                pendingItem = rollItemDrop(); itemDecided = false;
                 gameState      = 'between_stage'; canvas.style.cursor = 'default';
               }
               break;
