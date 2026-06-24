@@ -363,6 +363,166 @@ function makeStars(w: number, h: number): Star[] {
   }));
 }
 
+// ── sound engine ──────────────────────────────────────────────────────────────
+const SoundEngine = {
+  ctx: null as AudioContext | null,
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    this.ctx = new AudioContext();
+  },
+  play(type: WeaponType | 'explosion' | 'enemy_death' | 'boss_death' | 'level_up' | 'stage_complete' | 'shield_hit' | 'player_hit') {
+    if (!this.ctx) return;
+    const c = this.ctx, t = c.currentTime;
+    const g = c.createGain();
+    g.connect(c.destination);
+
+    if (type === 'pistol') {
+      const osc = c.createOscillator();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(380, t);
+      osc.frequency.exponentialRampToValueAtTime(180, t + 0.06);
+      g.gain.setValueAtTime(0.12, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+      osc.connect(g); osc.start(t); osc.stop(t + 0.06);
+
+    } else if (type === 'shotgun') {
+      const buf = c.createBuffer(1, Math.ceil(c.sampleRate * 0.12), c.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      const src = c.createBufferSource(); src.buffer = buf;
+      const flt = c.createBiquadFilter(); flt.type = 'lowpass'; flt.frequency.value = 800;
+      src.connect(flt); flt.connect(g);
+      g.gain.setValueAtTime(0.18, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+      src.start(t);
+
+    } else if (type === 'laser') {
+      const osc = c.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(900, t);
+      osc.frequency.exponentialRampToValueAtTime(400, t + 0.04);
+      g.gain.setValueAtTime(0.07, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+      osc.connect(g); osc.start(t); osc.stop(t + 0.04);
+
+    } else if (type === 'rocket') {
+      const osc = c.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(140, t);
+      osc.frequency.exponentialRampToValueAtTime(60, t + 0.18);
+      g.gain.setValueAtTime(0.18, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+      osc.connect(g); osc.start(t); osc.stop(t + 0.18);
+
+    } else if (type === 'railgun') {
+      const buf = c.createBuffer(1, Math.ceil(c.sampleRate * 0.08), c.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      const src = c.createBufferSource(); src.buffer = buf;
+      const flt = c.createBiquadFilter(); flt.type = 'highpass'; flt.frequency.value = 2000;
+      src.connect(flt); flt.connect(g);
+      g.gain.setValueAtTime(0.28, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+      src.start(t);
+
+    } else if (type === 'electric') {
+      const osc = c.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(500, t);
+      osc.frequency.exponentialRampToValueAtTime(900, t + 0.05);
+      osc.frequency.exponentialRampToValueAtTime(300, t + 0.10);
+      g.gain.setValueAtTime(0.12, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.10);
+      osc.connect(g); osc.start(t); osc.stop(t + 0.10);
+
+    } else if (type === 'explosion') {
+      const buf = c.createBuffer(1, Math.ceil(c.sampleRate * 0.35), c.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      const src = c.createBufferSource(); src.buffer = buf;
+      const flt = c.createBiquadFilter(); flt.type = 'lowpass'; flt.frequency.value = 320;
+      src.connect(flt); flt.connect(g);
+      g.gain.setValueAtTime(0.28, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+      src.start(t);
+
+    } else if (type === 'enemy_death') {
+      const osc = c.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(130, t);
+      osc.frequency.exponentialRampToValueAtTime(40, t + 0.09);
+      g.gain.setValueAtTime(0.10, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+      osc.connect(g); osc.start(t); osc.stop(t + 0.09);
+
+    } else if (type === 'level_up') {
+      [262, 330, 392].forEach((freq, i) => {
+        const osc = c.createOscillator(), ng = c.createGain();
+        osc.type = 'square'; osc.frequency.value = freq;
+        const s = t + i * 0.09;
+        ng.gain.setValueAtTime(0, s);
+        ng.gain.linearRampToValueAtTime(0.13, s + 0.01);
+        ng.gain.exponentialRampToValueAtTime(0.001, s + 0.10);
+        osc.connect(ng); ng.connect(c.destination);
+        osc.start(s); osc.stop(s + 0.10);
+      });
+
+    } else if (type === 'stage_complete') {
+      [262, 330, 392, 523].forEach((freq, i) => {
+        const osc = c.createOscillator(), ng = c.createGain();
+        osc.type = 'square'; osc.frequency.value = freq;
+        const s = t + i * 0.11;
+        ng.gain.setValueAtTime(0, s);
+        ng.gain.linearRampToValueAtTime(0.15, s + 0.01);
+        ng.gain.exponentialRampToValueAtTime(0.001, s + 0.22);
+        osc.connect(ng); ng.connect(c.destination);
+        osc.start(s); osc.stop(s + 0.22);
+      });
+
+    } else if (type === 'boss_death') {
+      const osc = c.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(280, t);
+      osc.frequency.exponentialRampToValueAtTime(25, t + 1.2);
+      g.gain.setValueAtTime(0.30, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+      osc.connect(g); osc.start(t); osc.stop(t + 1.2);
+      // noise layer underneath
+      const buf = c.createBuffer(1, Math.ceil(c.sampleRate * 0.6), c.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      const src = c.createBufferSource(); src.buffer = buf;
+      const flt = c.createBiquadFilter(); flt.type = 'lowpass'; flt.frequency.value = 500;
+      const ng = c.createGain();
+      src.connect(flt); flt.connect(ng); ng.connect(c.destination);
+      ng.gain.setValueAtTime(0.20, t);
+      ng.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+      src.start(t);
+
+    } else if (type === 'shield_hit') {
+      const osc = c.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(900, t);
+      osc.frequency.exponentialRampToValueAtTime(1400, t + 0.04);
+      osc.frequency.exponentialRampToValueAtTime(600, t + 0.10);
+      g.gain.setValueAtTime(0.10, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.10);
+      osc.connect(g); osc.start(t); osc.stop(t + 0.10);
+
+    } else if (type === 'player_hit') {
+      const buf = c.createBuffer(1, Math.ceil(c.sampleRate * 0.14), c.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+      const src = c.createBufferSource(); src.buffer = buf;
+      const flt = c.createBiquadFilter(); flt.type = 'lowpass'; flt.frequency.value = 600;
+      src.connect(flt); flt.connect(g);
+      g.gain.setValueAtTime(0.22, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+      src.start(t);
+    }
+  },
+};
+
 // ── component ─────────────────────────────────────────────────────────────────
 export default function Game() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -658,6 +818,7 @@ export default function Game() {
             stageIntroTimer = 2.5;
             gameState  = 'playing';
             canvas.style.cursor = 'none';
+            SoundEngine.init();
           }
         }
       } else if (gameState === 'upgrading') {
@@ -769,6 +930,7 @@ export default function Game() {
       if (!tgt) return;
       const dx = tgt.x - ship.x, dy = tgt.y - ship.y;
       const base = Math.atan2(dy, dx);
+      SoundEngine.play(w.type);
 
       // railgun: push a flash and a single fast piercing bullet (invisible)
       if (w.type === 'railgun') {
@@ -823,8 +985,10 @@ export default function Game() {
         const rem = eff - absorbed;
         player.hp = Math.max(0, player.hp - rem);
         shieldRegenDelay = 3;
+        SoundEngine.play(rem > 0 ? 'player_hit' : 'shield_hit');
       } else {
         player.hp = Math.max(0, player.hp - eff);
+        SoundEngine.play('player_hit');
       }
       hpRegenDelayTimer = player.regenDelay;
       invTimer    = 0.5;
@@ -838,6 +1002,7 @@ export default function Game() {
       gameState      = 'upgrading';
       upgradeChoices = pickNFromPool(3);
       canvas.style.cursor = 'default';
+      SoundEngine.play('level_up');
     }
     function addXp(n: number) {
       xp += n;
@@ -1629,6 +1794,7 @@ export default function Game() {
         // explosions
         for (const exp of pendingExp) {
           explosions.push({ id: uid++, pos: exp.pos, age: 0, maxR: exp.r });
+          SoundEngine.play('explosion');
           for (const blob of blobs)
             if (!deadBlobs.has(blob.id) && d(blob.pos, exp.pos) < exp.r) deadBlobs.add(blob.id);
         }
@@ -1671,10 +1837,12 @@ export default function Game() {
             }
             if (b.explodeR > 0) {
               explosions.push({ id: uid++, pos: { ...boss.pos }, age: 0, maxR: b.explodeR * player.explodeRadiusMult });
+              SoundEngine.play('explosion');
               deadBullets.add(b.id);
             } else if (b.pierceLeft > 0) { b.pierceLeft--; }
             else { deadBullets.add(b.id); }
             if (boss.hp <= 0) {
+              SoundEngine.play('boss_death');
               for (let i = 0; i < 20; i++)
                 xpOrbs.push({ id: uid++, pos: { x: boss.pos.x+(Math.random()-0.5)*100, y: boss.pos.y+(Math.random()-0.5)*100 } });
               boss = null;
@@ -1684,6 +1852,7 @@ export default function Game() {
                 upgradeChoices = pickNFromPool(3);
                 pendingItem = rollItemDrop(); itemDecided = false;
                 gameState      = 'between_stage'; canvas.style.cursor = 'default';
+                SoundEngine.play('stage_complete');
               }
               break;
             }
@@ -1691,14 +1860,17 @@ export default function Game() {
         }
 
         // kill count + orbs + vampire + modifiers
+        if (deadBlobs.size > 0) SoundEngine.play('enemy_death');
         killCount += deadBlobs.size;
         if (vampireHeal > 0 && deadBlobs.size > 0)
           player.hp = Math.min(player.maxHp, player.hp + deadBlobs.size * vampireHeal);
         for (const blob of blobs) {
           if (deadBlobs.has(blob.id)) {
             xpOrbs.push({ id: uid++, pos: { x: blob.pos.x+(Math.random()-0.5)*16, y: blob.pos.y+(Math.random()-0.5)*16 } });
-            if (stageConfig().modifier === 'explosive_death')
+            if (stageConfig().modifier === 'explosive_death') {
               explosions.push({ id: uid++, pos: { ...blob.pos }, age: 0, maxR: 55 * player.explodeRadiusMult });
+              SoundEngine.play('explosion');
+            }
           }
         }
         // splitter: spawn 2 mini-blobs per dead splitter parent
