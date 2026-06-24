@@ -109,12 +109,29 @@ Higher rarities give larger bonuses but epic and legendary cards can carry **pen
 
 Item rarity weighted by stage and `rarityFind`. Legendary items start appearing from stage 4.
 
+### Sound Engine
+
+10 procedural sounds via Web Audio API — no audio files, all synthesized in `game.tsx`.
+
+| Sound | Trigger |
+|---|---|
+| Pistol / Shotgun / Laser / Rocket / Railgun / Electric | Each weapon fires |
+| Enemy death | Any blob killed (once per frame batch) |
+| Explosion | Rocket AOE, explosive-death modifier, rocket hitting boss |
+| Boss death | Boss HP reaches 0 |
+| Level up | XP threshold crossed — rising C4→E4→G4 arpeggio |
+| Stage complete | Boss defeated, stage advances — C4→E4→G4→C5 fanfare |
+| Shield hit | Damage fully absorbed by shield |
+| Player hit | HP reduced |
+
+AudioContext initialized on difficulty-card click (satisfies browser autoplay policy).
+
 ---
 
 ## Current State
 
 - **TypeScript:** Compiles clean (`tsc --noEmit` exit 0)
-- **Git:** All changes committed and pushed — commit `6d67df3`
+- **Git:** All changes committed and pushed — commit `c981981`
 - **Tested:** No runtime errors confirmed via TypeScript; gameplay balance untested in browser
 
 ---
@@ -122,12 +139,12 @@ Item rarity weighted by stage and `rarityFind`. Legendary items start appearing 
 ## Known Gaps / Next Steps
 
 ### Immediate
-- [ ] **Browser test** — play through at least one full run to verify all new stats, rarity cards, chain lightning, and item drops work correctly in-game
+- [ ] **Browser test** — play through at least one full run to verify all new stats, rarity cards, chain lightning, item drops, and sounds work correctly in-game
 - [ ] **Balance pass** — legendary card bonuses and penalties may need tuning after play-testing
 - [ ] **HUD for new stats** — `attackSpeedMult`, `resourceFind`, etc. are not yet shown in the HUD; add compact stat row
 
 ### Features to Consider
-- [ ] **Sound effects** — weapon fire, explosions, level-up, boss death
+- [x] **Sound effects** — weapon fire, explosions, level-up, boss death *(done — commit c981981)*
 - [ ] **Kill streak / combo counter** — visual feedback for rapid kills
 - [ ] **More boss patterns** — spiral shot, wall of bullets, split-phase
 - [ ] **New enemy type** — e.g. Bomber (explodes on death), Sniper (fires from range)
